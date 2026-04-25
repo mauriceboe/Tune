@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Tune</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark">
+  <div class="backdrop" id="backdrop"></div>
+  <div class="backdrop-tint"></div>
+
+  <header class="titlebar pywebview-drag-region" id="titlebar">
+    <div class="titlebar-left pywebview-drag-region">
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-text" id="statusText">Starting…</span>
+    </div>
+    <div class="titlebar-right">
+      <button class="iconbtn" id="btnMini" title="Toggle mini player">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="4"/></svg>
+      </button>
+      <button class="iconbtn" id="btnMin" title="Minimize">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
+      </button>
+      <button class="iconbtn close" id="btnClose" title="Close">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="content">
+    <section class="now-playing">
+      <div class="cover-shadow">
+        <div class="cover" id="cover">
+          <div class="cover-fallback">♪</div>
+        </div>
+      </div>
+
+      <div class="meta">
+        <div class="title" id="title">Not playing</div>
+        <div class="artist" id="artist">—</div>
+        <div class="album" id="album"></div>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-times">
+          <span id="timeNow">0:00</span>
+          <span id="timeTotal">0:00</span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="ctrl glass-btn" id="btnPrev" aria-label="Previous">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6L20 5v14z"/></svg>
+        </button>
+        <button class="ctrl ctrl-primary" id="btnPlay" aria-label="Play/Pause">
+          <svg id="iconPlay" viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button class="ctrl glass-btn" id="btnNext" aria-label="Next">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 6h2v12h-2zM4 5l10.5 7L4 19z"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <nav class="tabs glass-card" id="tabs">
+      <button class="tab active" data-tab="now">Now Playing</button>
+      <button class="tab" data-tab="lyrics">Lyrics</button>
+      <button class="tab" data-tab="stats">Stats</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <section class="tabpanel active" data-panel="now">
+      <div class="glass-card panel">
+        <div class="panel-title">Recently played</div>
+        <div class="recent-list" id="recentList">
+          <div class="empty">No tracks yet.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tabpanel" data-panel="lyrics">
+      <div class="glass-card panel">
+        <div class="panel-title" id="lyricsStatus">No track playing.</div>
+        <div class="lyrics-scroll" id="lyricsScroll"></div>
+      </div>
+    </section>
+
+    <section class="tabpanel" data-panel="stats">
+      <div class="glass-card panel">
+        <div class="panel-title">Today</div>
+        <div class="stats-row">
+          <div class="stat-block"><div class="stat-value" id="statTime">0m</div><div class="stat-label">Listening time</div></div>
+          <div class="stat-block"><div class="stat-value" id="statTracks">0</div><div class="stat-label">Tracks</div></div>
+          <div class="stat-block"><div class="stat-value small" id="statTop" title="">—</div><div class="stat-label">Top artist</div></div>
+        </div>
+      </div>
+      <div class="glass-card panel">
+        <div class="panel-title">History</div>
+        <div class="history-scroll" id="historyList"><div class="empty">No history yet.</div></div>
+      </div>
+    </section>
+
+    <section class="tabpanel" data-panel="settings">
+      <div class="glass-card panel">
+        <div class="panel-section-title">Discord</div>
+        <div class="setting-row">
+          <span>Show now playing on Discord</span>
+          <label class="switch"><input type="checkbox" id="setDiscord"><span class="slider"></span></label>
+        </div>
+
+        <div class="panel-section-title">Window</div>
+        <div class="setting-row">
+          <span>Minimize to tray when closed</span>
+          <label class="switch"><input type="checkbox" id="setTray"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
+          <span>Start minimized</span>
+          <label class="switch"><input type="checkbox" id="setStartMin"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
+          <span>Always on top</span>
+          <label class="switch"><input type="checkbox" id="setAOT"><span class="slider"></span></label>
+        </div>
+
+        <div class="panel-section-title">System</div>
+        <div class="setting-row">
+          <span>Run on Windows startup</span>
+          <label class="switch"><input type="checkbox" id="setAutostart"><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <div class="glass-card credits">
+        <div class="credits-built">Built with <span class="heart">♥</span> by Maurice</div>
+        <div class="credits-links">
+          <a href="https://github.com/mauriceboe" class="link-pill ext-link" data-icon="github">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.6-1.5-1.4-1.9-1.4-1.9-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.3 1.9 1.3 1.1 1.9 2.9 1.4 3.6 1 .1-.8.4-1.4.8-1.7-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.4 1.3-3.2-.1-.3-.6-1.6.1-3.4 0 0 1-.3 3.4 1.2a11.7 11.7 0 0 1 6.2 0c2.3-1.5 3.4-1.2 3.4-1.2.7 1.8.2 3.1.1 3.4.8.8 1.3 1.9 1.3 3.2 0 4.7-2.8 5.7-5.5 6 .4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+            <span>GitHub</span>
+          </a>
+          <a href="https://www.buymeacoffee.com/mauriceboe" class="link-pill ext-link bmc" data-icon="bmc">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 3h15v2.3l1.6.4c.6.2 1 .7 1 1.3v3c0 1.4-1.2 2.6-2.6 2.6H18v3.7c0 2-1.6 3.7-3.7 3.7H6.7C4.6 20 3 18.4 3 16.4V3zm15 4.4v3.3h.6c.4 0 .7-.3.7-.7V8c0-.2-.1-.4-.4-.5L18 7.4z"/></svg>
+            <span>Buy me a coffee</span>
+          </a>
+          <a href="https://ko-fi.com/mauriceboe" class="link-pill ext-link kofi" data-icon="kofi">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 6h14a4 4 0 0 1 0 8h-1v.5A3.5 3.5 0 0 1 12.5 18h-6A3.5 3.5 0 0 1 3 14.5V6zm14 6a2 2 0 0 0 0-4h-1v4h1z"/></svg>
+            <span>Ko-fi</span>
+          </a>
+        </div>
+        <div class="credits-version">Tune · v<span id="appVersion">1.0.0</span></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="resize-edge resize-r" data-resize="r"></div>
+  <div class="resize-edge resize-b" data-resize="b"></div>
+  <div class="resize-edge resize-br" data-resize="br"></div>
+  <div class="resize-edge resize-l" data-resize="l"></div>
+  <div class="resize-edge resize-bl" data-resize="bl"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -94,11 +94,47 @@ try:
 except Exception:
     pass
 
-# Pin the WebView2 user-data folder so the runtime initialises only once
-# on a stable path independent of the working directory.
-_WV2_DATA = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME / "WebView2"
-_WV2_DATA.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("WEBVIEW2_USER_DATA_FOLDER", str(_WV2_DATA))
+# WebView2 holds an exclusive lock on its user-data folder while running. If
+# the previous Tune instance crashed, the lock files survive and a fresh
+# launch fails with HRESULT 0x800700AA ("resource already in use") — the app
+# silently hangs at startup. To stay robust against that, give every launch
+# its own per-PID subfolder and garbage-collect the folders of any PIDs that
+# are no longer alive on the way in.
+def _pid_alive(pid: int) -> bool:
+    try:
+        kernel32 = ctypes.windll.kernel32
+        SYNCHRONIZE = 0x00100000
+        handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _setup_webview_data_dir() -> Path:
+    base = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME / "WebView2"
+    base.mkdir(parents=True, exist_ok=True)
+    for child in base.iterdir():
+        if not child.is_dir() or not child.name.startswith("pid-"):
+            continue
+        try:
+            old_pid = int(child.name[4:])
+        except ValueError:
+            continue
+        if not _pid_alive(old_pid):
+            shutil.rmtree(child, ignore_errors=True)
+    my_dir = base / f"pid-{os.getpid()}"
+    my_dir.mkdir(exist_ok=True)
+    return my_dir
+
+
+_WV2_DATA = _setup_webview_data_dir()
+os.environ["WEBVIEW2_USER_DATA_FOLDER"] = str(_WV2_DATA)
+
+import atexit
+atexit.register(lambda: shutil.rmtree(_WV2_DATA, ignore_errors=True))
 
 import pystray
 import webview

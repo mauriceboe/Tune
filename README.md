@@ -30,8 +30,19 @@ Discord Rich Presence for Apple Music on Windows — with synced lyrics, listeni
   <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Settings" width="32%" /></a>
   <br />
   <a href="docs/screenshots/red.png"><img src="docs/screenshots/red.png" alt="Red accent" width="32%" /></a>
-  <a href="docs/screenshots/orange-settings.png"><img src="docs/screenshots/orange-settings.png" alt="Warm accent settings" width="32%" /></a>
   <a href="docs/screenshots/stats-monochrome.png"><img src="docs/screenshots/stats-monochrome.png" alt="Monochrome accent" width="32%" /></a>
+</div>
+
+<br />
+
+<div align="center">
+
+### On Discord
+
+<a href="docs/screenshots/discord-profile.png"><img src="docs/screenshots/discord-profile.png" alt="Discord profile with Tune" width="38%" /></a>
+&nbsp;
+<a href="docs/screenshots/discord-presence.png"><img src="docs/screenshots/discord-presence.png" alt="Discord Rich Presence card" width="56%" /></a>
+
 </div>
 
 ---

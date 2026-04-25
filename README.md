@@ -30,7 +30,7 @@ Discord Rich Presence for Apple Music on Windows — with synced lyrics, listeni
   <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Settings" width="32%" /></a>
   <br />
   <a href="docs/screenshots/red.png"><img src="docs/screenshots/red.png" alt="Red accent" width="32%" /></a>
-  <a href="docs/screenshots/orange.png"><img src="docs/screenshots/orange.png" alt="Warm accent" width="32%" /></a>
+  <a href="docs/screenshots/orange-settings.png"><img src="docs/screenshots/orange-settings.png" alt="Warm accent settings" width="32%" /></a>
   <a href="docs/screenshots/stats-monochrome.png"><img src="docs/screenshots/stats-monochrome.png" alt="Monochrome accent" width="32%" /></a>
 </div>
 

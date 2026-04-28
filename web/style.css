@@ -651,8 +651,9 @@ button { font-family: inherit; }
 body.mini { font-size: 13px; }
 body.mini .titlebar { height: 28px; padding: 0 8px 0 12px; }
 body.mini .content {
-  padding: 0 14px 64px;     /* leave 64px for the fixed bottom bar */
-  gap: 8px;
+  padding: 4px 14px 64px;   /* leave 64px for the fixed bottom bar */
+  gap: 6px;
+  justify-content: center;
 }
 body.mini .now-playing { gap: 8px; padding-top: 2px; }
 body.mini .cover { width: clamp(96px, 38vw, 140px); border-radius: 14px; }
@@ -703,7 +704,15 @@ body.mini .mini-bar { display: flex; }
 .mini-bar-meta {
   flex: 1 1 auto;
   min-width: 0;
-  display: flex; flex-direction: column; gap: 1px;
+  display: flex; flex-direction: column; gap: 0;
+}
+.mini-bar-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 1px;
 }
 .mini-bar-title {
   font-size: 12px;
@@ -713,6 +722,8 @@ body.mini .mini-bar { display: flex; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.mini-bar.empty { opacity: 0.5; }
+.mini-bar.empty .mini-bar-tag { color: var(--text-dim); }
 .mini-bar-artist {
   font-size: 10.5px;
   color: var(--text-muted);

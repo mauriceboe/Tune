@@ -41,7 +41,7 @@ START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home())))
     / "Microsoft" / "Windows" / "Start Menu" / "Programs" / f"{APP_DISPLAY_NAME}.lnk"
 )
-PUBLISHER = "Maurice Boe"
+PUBLISHER = "mauriceboe"
 HOMEPAGE_URL = "https://github.com/mauriceboe/Tune"
 UNINSTALL_REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Tune"
 

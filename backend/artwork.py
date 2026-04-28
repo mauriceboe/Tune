@@ -61,13 +61,15 @@ class ArtworkHost:
     def _save(self):
         save_json(ARTWORK_CACHE_PATH, self._cache)
 
-    def upload(self, image_bytes: bytes):
+    def upload(self, image_bytes: bytes, log=None):
         if not image_bytes:
             return None
         h = hashlib.sha256(image_bytes).hexdigest()
         with self._lock:
             cached = self._cache.get(h)
         if cached:
+            if log:
+                log(f"artwork: cache hit {h[:12]}... -> {cached}")
             return cached
         try:
             boundary = uuid.uuid4().hex
@@ -95,6 +97,13 @@ class ArtworkHost:
                 with self._lock:
                     self._cache[h] = url
                     self._save()
+                if log:
+                    log(f"artwork: uploaded {h[:12]}... -> {url} ({len(image_bytes)} bytes)")
                 return url
-        except Exception:
+            if log:
+                log(f"artwork: catbox returned non-URL: {url!r}")
+        except Exception as e:
+            if log:
+                log(f"artwork: upload failed: {e!r}")
             return None
+        return None

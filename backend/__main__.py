@@ -20,6 +20,17 @@ import traceback
 from datetime import datetime
 from typing import Any, Callable
 
+# When the parent (Tauri) creates the stdout pipe, Python guesses the encoding
+# from the system default (often cp1252 on Windows). Track titles, artist
+# names and lyrics regularly contain non-Latin1 characters, which get encoded
+# as invalid byte sequences and crash the Rust reader's UTF-8 LineReader.
+# Force UTF-8 on both ends and replace anything that can't round-trip.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from .artwork import ArtworkHost
 from .config import APP_NAME, APP_VERSION, GITHUB_REPO, LOG_PATH
 from .lyrics import LyricsCache

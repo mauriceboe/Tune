@@ -236,17 +236,24 @@ class PresenceWorker:
 
                 self._record_play(track)
                 key = f"{track['artist']}|{track['title']}|{track['start']}"
-                discord_artwork = None
-                if track.get("thumb_bytes"):
-                    discord_artwork = self.artwork_host.upload(track["thumb_bytes"])
 
                 if discord_on and rpc and key != last_key:
+                    discord_artwork = None
+                    if track.get("thumb_bytes"):
+                        discord_artwork = self.artwork_host.upload(
+                            track["thumb_bytes"], log=self._log
+                        )
+                    large_image = discord_artwork or "apple_music"
+                    self._log(
+                        f"worker: pushing presence track={track.get('title')!r} "
+                        f"artist={track.get('artist')!r} large_image={large_image!r}"
+                    )
                     q = urllib.parse.quote(f"{track['artist']} {track['title']}")
                     payload = {
                         "name": "Apple Music",
                         "details": (track["title"] or "Unknown")[:128],
                         "state": (track["artist"] or "Unknown")[:128],
-                        "large_image": discord_artwork or "apple_music",
+                        "large_image": large_image,
                         "large_text": (track["album"] or track["title"])[:128],
                         "small_image": "apple_music",
                         "small_text": "Apple Music",

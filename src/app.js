@@ -161,18 +161,50 @@ function buildWaveform(seedKey) {
   }
   ui.waveform.innerHTML = "";
   ui.waveform.appendChild(frag);
+  lastHeadIdx = -2; // force full repaint on next paintWaveform()
 }
+
+let lastHeadIdx = -2; // -2 means "needs full repaint" (e.g. after buildWaveform)
 
 function paintWaveform(ratio) {
   const bars = ui.waveform.children;
   const n = bars.length;
   if (!n) return;
   const headIdx = Math.min(n - 1, Math.max(0, Math.floor(ratio * n)));
-  for (let i = 0; i < n; i++) {
-    const b = bars[i];
-    b.classList.toggle("played", i < headIdx);
-    b.classList.toggle("head", i === headIdx);
+  if (headIdx === lastHeadIdx) return;
+
+  // First call after a track change (or no prior state) — paint everything.
+  if (lastHeadIdx === -2) {
+    for (let i = 0; i < n; i++) {
+      const b = bars[i];
+      b.classList.toggle("played", i < headIdx);
+      b.classList.toggle("head", i === headIdx);
+    }
+  } else if (headIdx > lastHeadIdx) {
+    // Head moved forward — flip the previous head into played, fill the gap.
+    if (lastHeadIdx >= 0 && bars[lastHeadIdx]) {
+      bars[lastHeadIdx].classList.remove("head");
+      bars[lastHeadIdx].classList.add("played");
+    }
+    for (let i = lastHeadIdx + 1; i < headIdx; i++) bars[i].classList.add("played");
+    if (bars[headIdx]) bars[headIdx].classList.add("head");
+  } else {
+    // Head moved backwards — clear played from the gap and reset states.
+    if (lastHeadIdx >= 0 && bars[lastHeadIdx]) {
+      bars[lastHeadIdx].classList.remove("head");
+    }
+    for (let i = headIdx + 1; i <= lastHeadIdx; i++) {
+      if (bars[i]) bars[i].classList.remove("played", "head");
+    }
+    if (bars[headIdx]) {
+      bars[headIdx].classList.remove("played");
+      bars[headIdx].classList.add("head");
+    }
   }
+  // Smooth sub-bar progress for the head bar's glow position.
+  const subPos = (ratio * n) - headIdx;
+  ui.waveform.style.setProperty("--head-sub", subPos.toFixed(3));
+  lastHeadIdx = headIdx;
 }
 
 // ---- track render ----
@@ -261,18 +293,40 @@ function setRepeatState(mode) {
   if (mode === "track") ui.btnRepeat.classList.add("active", "repeat-track");
 }
 
-function tickProgress() {
+let _lastTextTick = 0;
+let _lastShownSecond = -1;
+
+function tickProgress(now = performance.now()) {
   const t = state.track;
-  if (t && t.duration) {
-    const elapsed = t.playing
-      ? Math.min(t.duration, Math.max(0, Math.floor(Date.now() / 1000) - t.start))
-      : Math.min(t.duration, Math.max(0, t.position || 0));
-    const ratio = t.duration ? elapsed / t.duration : 0;
-    paintWaveform(ratio);
-    ui.timeNow.textContent = fmtTime(elapsed);
-    ui.timeRemain.textContent = `-${fmtTime(Math.max(0, t.duration - elapsed))}`;
-    if (state.tab === "lyrics") highlightLyric(elapsed);
+  if (!t || !t.duration) return;
+  const elapsedFloat = t.playing
+    ? Math.min(t.duration, Math.max(0, Date.now() / 1000 - t.start))
+    : Math.min(t.duration, Math.max(0, t.position || 0));
+  const ratio = elapsedFloat / t.duration;
+  paintWaveform(ratio);
+  // Text: only refresh when the visible second changes — once per second max.
+  const second = Math.floor(elapsedFloat);
+  if (second !== _lastShownSecond) {
+    _lastShownSecond = second;
+    ui.timeNow.textContent = fmtTime(second);
+    ui.timeRemain.textContent = `-${fmtTime(Math.max(0, t.duration - second))}`;
   }
+  if (state.tab === "lyrics" && now - _lastTextTick > 250) {
+    _lastTextTick = now;
+    highlightLyric(elapsedFloat);
+  }
+}
+
+let _rafHandle = 0;
+function rafLoop() {
+  _rafHandle = 0;
+  tickProgress(performance.now());
+  if (state.track) {
+    _rafHandle = requestAnimationFrame(rafLoop);
+  }
+}
+function startRaf() {
+  if (!_rafHandle) _rafHandle = requestAnimationFrame(rafLoop);
 }
 
 // ---- recents / history / stats / lyrics ----
@@ -457,7 +511,8 @@ listen("backend://event", (e) => {
     }
     if (d.stats) renderStats(d.stats);
     if (d.history) renderHistory(d.history);
-    tickProgress();
+    tickProgress(performance.now());
+    startRaf();
   } else if (u.event === "lyrics") {
     if (u.data && u.data.key === state.trackKey) renderLyrics(u.data.lines);
   } else if (u.event === "ready") {
@@ -515,7 +570,6 @@ ui.waveform.addEventListener("click", (e) => {
 });
 
 buildWaveform("tune");
-setInterval(tickProgress, 500);
 
 // ---- progress tick that polls update state on Settings tab ----
 setInterval(async () => {

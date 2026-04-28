@@ -234,7 +234,11 @@ button { font-family: inherit; }
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.18);
   transform-origin: center;
-  transition: background 220ms ease, transform 220ms ease;
+  transition:
+    background 140ms linear,
+    transform 180ms cubic-bezier(.2,.8,.2,1),
+    box-shadow 180ms linear;
+  will-change: background, transform;
 }
 .waveform .wf-bar.played {
   background: linear-gradient(
@@ -251,6 +255,14 @@ button { font-family: inherit; }
   );
   box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 70%, transparent);
   transform: scaleY(1.18);
+}
+/* Soft fade-in on the bar right after the playhead so the leading edge feels less abrupt. */
+.waveform .wf-bar.head + .wf-bar {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.32),
+    rgba(255, 255, 255, 0.22)
+  );
 }
 .progress-times {
   display: flex;

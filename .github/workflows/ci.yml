@@ -33,5 +33,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
 
+      - name: Stub sidecar binary so Tauri build script validates
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          New-Item -ItemType File -Force -Path src-tauri/binaries/tune-backend-x86_64-pc-windows-msvc.exe | Out-Null
+
       - name: Cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml

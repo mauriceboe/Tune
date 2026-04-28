@@ -138,6 +138,33 @@
           <span>Run on Windows startup</span>
           <label class="switch"><input type="checkbox" id="setAutostart"><span class="slider"></span></label>
         </div>
+        <div class="setting-row">
+          <span>Automatically check for updates</span>
+          <label class="switch"><input type="checkbox" id="setAutoUpdate"><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <div class="glass-card panel" id="updatePanel">
+        <div class="panel-section-title">Updates</div>
+        <div class="update-row">
+          <div class="update-text">
+            <div class="update-headline" id="updateHeadline">Loading…</div>
+            <div class="update-subline" id="updateSubline">Current version v<span id="updateCurrent">—</span></div>
+          </div>
+          <div class="update-actions">
+            <button class="link-pill update-btn" id="updateBtn" type="button">Check now</button>
+          </div>
+        </div>
+        <div class="update-progress-wrap" id="updateProgressWrap" hidden>
+          <div class="update-progress">
+            <div class="update-progress-fill" id="updateProgressFill"></div>
+          </div>
+          <div class="update-progress-meta">
+            <span id="updateProgressPct">0%</span>
+            <span id="updateProgressBytes">0 / 0 MB</span>
+          </div>
+        </div>
+        <div class="update-error" id="updateError" hidden></div>
       </div>
 
       <div class="glass-card credits">

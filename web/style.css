@@ -504,6 +504,85 @@ button { font-family: inherit; }
 }
 .switch input:checked + .slider::before { transform: translateX(16px); }
 
+/* ---- Update panel ---- */
+.update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.update-text { min-width: 0; flex: 1 1 auto; }
+.update-headline {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.update-headline.is-ready { color: color-mix(in srgb, var(--accent) 80%, white 20%); }
+.update-headline.is-error { color: #f87171; }
+.update-subline {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.update-actions { flex: 0 0 auto; }
+.update-btn {
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-weight: 600;
+  font-size: 11.5px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.update-btn[disabled] {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+.update-btn.is-primary {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 110%, transparent), var(--accent));
+  border-color: color-mix(in srgb, var(--accent) 50%, white 0%);
+  color: #fff;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.update-progress-wrap { margin-top: 10px; }
+.update-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.update-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, white 40%));
+  border-radius: inherit;
+  transition: width 220ms ease;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.update-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
+}
+.update-error {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.10);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 10px;
+  padding: 8px 10px;
+  word-break: break-word;
+}
+
 .credits {
   margin-top: 16px;
   padding: 18px 14px;

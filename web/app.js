@@ -41,6 +41,16 @@ const ui = {
   miniBarTitle: $("miniBarTitle"),
   miniBarArtist: $("miniBarArtist"),
   miniBarTime: $("miniBarTime"),
+  updatePanel: $("updatePanel"),
+  updateHeadline: $("updateHeadline"),
+  updateSubline: $("updateSubline"),
+  updateCurrent: $("updateCurrent"),
+  updateBtn: $("updateBtn"),
+  updateProgressWrap: $("updateProgressWrap"),
+  updateProgressFill: $("updateProgressFill"),
+  updateProgressPct: $("updateProgressPct"),
+  updateProgressBytes: $("updateProgressBytes"),
+  updateError: $("updateError"),
 };
 
 const WAVEFORM_BARS = 56;
@@ -330,6 +340,7 @@ window.__app = {
     if ("lyrics_for" in u) {
       if (u.lyrics_for === state.trackKey) renderLyrics(u.lyrics);
     }
+    if (u.update) renderUpdate({ ...updateState, ...u.update });
     tickProgress();
   },
   setMini(mini) {
@@ -342,7 +353,12 @@ window.__app = {
     if (s.start_minimized !== undefined) $("setStartMin").checked = !!s.start_minimized;
     if (s.always_on_top !== undefined) $("setAOT").checked = !!s.always_on_top;
     if (s.autostart !== undefined) $("setAutostart").checked = !!s.autostart;
-    if (s.version) ui.appVersion.textContent = s.version;
+    if (s.auto_check_updates !== undefined) $("setAutoUpdate").checked = !!s.auto_check_updates;
+    if (s.version) {
+      ui.appVersion.textContent = s.version;
+      if (ui.updateCurrent) ui.updateCurrent.textContent = s.version;
+    }
+    pollUpdateState();
   },
 };
 
@@ -429,6 +445,115 @@ $("setTray").addEventListener("change", (e) => call("save_setting", "minimize_to
 $("setStartMin").addEventListener("change", (e) => call("save_setting", "start_minimized", e.target.checked));
 $("setAOT").addEventListener("change", (e) => call("save_setting", "always_on_top", e.target.checked));
 $("setAutostart").addEventListener("change", (e) => call("set_autostart", e.target.checked));
+$("setAutoUpdate").addEventListener("change", (e) => call("save_setting", "auto_check_updates", e.target.checked));
+
+// ---- Update panel ----
+const updateState = { kind: "idle", active: false, pending: false };
+
+function fmtBytes(n) {
+  if (!n || n < 0) return "0";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderUpdate(s) {
+  Object.assign(updateState, s || {});
+  if (s.current && ui.updateCurrent) ui.updateCurrent.textContent = s.current;
+
+  const kind = s.kind || "idle";
+  const v = s.version || s.tag || "";
+  const headline = ui.updateHeadline;
+  const sub = ui.updateSubline;
+  const btn = ui.updateBtn;
+
+  headline.classList.remove("is-ready", "is-error");
+  ui.updateError.hidden = true;
+  ui.updateProgressWrap.hidden = true;
+  btn.classList.remove("is-primary");
+  btn.disabled = false;
+
+  if (!s.active) {
+    headline.textContent = "Auto-update unavailable";
+    sub.textContent = "Tune is running from source — install the official EXE to enable updates.";
+    btn.disabled = true;
+    btn.textContent = "Check now";
+    return;
+  }
+
+  switch (kind) {
+    case "ready":
+      headline.textContent = `Update v${v} ready to install`;
+      headline.classList.add("is-ready");
+      sub.textContent = "Tune will close and relaunch on the new version.";
+      btn.textContent = "Restart & install";
+      btn.classList.add("is-primary");
+      break;
+    case "downloading":
+      headline.textContent = `Downloading update v${v}…`;
+      sub.textContent = "Hang tight — this won't take long.";
+      btn.textContent = "Downloading…";
+      btn.disabled = true;
+      ui.updateProgressWrap.hidden = false;
+      const pct = typeof s.progress === "number" ? s.progress : 0;
+      ui.updateProgressFill.style.width = `${pct}%`;
+      ui.updateProgressPct.textContent = `${pct}%`;
+      ui.updateProgressBytes.textContent = `${fmtBytes(s.bytes || 0)} / ${fmtBytes(s.total || 0)}`;
+      break;
+    case "verifying":
+      headline.textContent = `Verifying v${v}…`;
+      sub.textContent = "Checking the download integrity.";
+      btn.textContent = "Verifying…";
+      btn.disabled = true;
+      break;
+    case "checking":
+      headline.textContent = "Checking for updates…";
+      sub.textContent = "Talking to GitHub.";
+      btn.textContent = "Checking…";
+      btn.disabled = true;
+      break;
+    case "available":
+      headline.textContent = `Update v${v} available`;
+      sub.textContent = `Size: ${fmtBytes(s.size || 0)}. Will download automatically.`;
+      btn.textContent = "Download now";
+      break;
+    case "up_to_date":
+      headline.textContent = "You're on the latest version";
+      sub.textContent = `Current version v${s.current || updateState.current || "—"}.`;
+      btn.textContent = "Check again";
+      break;
+    case "error":
+      headline.textContent = "Update failed";
+      headline.classList.add("is-error");
+      sub.textContent = "Click to retry.";
+      btn.textContent = "Retry";
+      ui.updateError.hidden = false;
+      ui.updateError.textContent = String(s.error || "unknown error");
+      break;
+    default:
+      headline.textContent = "Updates";
+      sub.textContent = `Current version v${s.current || updateState.current || "—"}.`;
+      btn.textContent = "Check now";
+  }
+}
+
+ui.updateBtn.addEventListener("click", () => {
+  if (updateState.kind === "ready") {
+    call("install_update");
+    return;
+  }
+  call("check_for_updates");
+});
+
+async function pollUpdateState() {
+  const s = await call("get_update_state");
+  if (s) renderUpdate(s);
+}
+
+// Poll while the user is on the Settings tab to keep progress live.
+setInterval(() => {
+  if (state.tab === "settings") pollUpdateState();
+}, 600);
 
 window.addEventListener("pywebviewready", () => {
   call("ready").then((s) => { if (s) window.__app.setSettings(s); });

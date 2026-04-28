@@ -25,7 +25,7 @@ from pathlib import Path
 
 APP_NAME = "Tune"
 APP_DISPLAY_NAME = "Tune"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 APP_AUMID = "dev.maurice.tune"
 
 DISCORD_CLIENT_ID = os.environ.get("TUNE_DISCORD_CLIENT_ID", "861702238472241162")
@@ -613,9 +613,31 @@ class PresenceWorker:
                 return s
         return None
 
+    @staticmethod
+    def _decode_repeat(mode) -> str:
+        # winsdk MediaPlaybackAutoRepeatMode: 0=None, 1=Track, 2=List
+        try:
+            v = int(mode)
+        except Exception:
+            return "none"
+        return {0: "none", 1: "track", 2: "list"}.get(v, "none")
+
+    @staticmethod
+    def _decode_shuffle(value) -> bool:
+        # IsShuffleActive is a Nullable<bool>; winsdk surfaces it as bool or None.
+        return bool(value) if value is not None else False
+
     async def _read_track(self, session):
         info = session.get_playback_info()
         playing = info.playback_status == PlaybackStatus.PLAYING
+        try:
+            shuffle = self._decode_shuffle(info.is_shuffle_active)
+        except Exception:
+            shuffle = False
+        try:
+            repeat = self._decode_repeat(info.auto_repeat_mode)
+        except Exception:
+            repeat = "none"
         props = await session.try_get_media_properties_async()
         timeline = session.get_timeline_properties()
         position = timeline.position.total_seconds() if timeline.position else 0
@@ -633,6 +655,8 @@ class PresenceWorker:
             "duration": end,
             "start": start_ts,
             "end": end_ts,
+            "shuffle": shuffle,
+            "repeat": repeat,
             "thumb_bytes": thumb_bytes,
         }
 
@@ -772,6 +796,8 @@ class PresenceWorker:
             "album": track.get("album"),
             "duration": int(track.get("duration") or 0),
             "start": int(track.get("start") or 0),
+            "shuffle": bool(track.get("shuffle")),
+            "repeat": track.get("repeat") or "none",
             "cover_data_url": cover_data_url,
             "accent": accent,
         }
@@ -1033,6 +1059,13 @@ class Api:
     def media_action(self, action):
         self.app.media_action(action)
 
+    def media_action_seek(self, seconds):
+        try:
+            self.app.media_seek(int(seconds))
+        except Exception:
+            pass
+        return True
+
     def save_setting(self, key, value):
         self.app.save_setting(key, value)
         return True
@@ -1151,11 +1184,51 @@ class AppController:
                 session.try_skip_next_async()
             elif action == "prev":
                 session.try_skip_previous_async()
+            elif action == "shuffle_toggle":
+                self._toggle_shuffle(session)
+            elif action == "repeat_cycle":
+                self._cycle_repeat(session)
         except Exception:
             pass
-        # Wake the worker so the UI reflects the new track without waiting for the poll cycle.
+        # Wake the worker so the UI reflects the new state without waiting for the poll cycle.
         threading.Timer(0.08, self.worker.kick).start()
         threading.Timer(0.4, self.worker.kick).start()
+
+    def media_seek(self, seconds: int):
+        session = self.worker.get_session()
+        if not session:
+            return
+        try:
+            # SMTC TimeSpan is in 100ns ticks; pass an int via timedelta-equivalent.
+            from datetime import timedelta
+            session.try_change_playback_position_async(timedelta(seconds=max(0, int(seconds))))
+        except Exception:
+            pass
+        threading.Timer(0.08, self.worker.kick).start()
+
+    def _toggle_shuffle(self, session):
+        try:
+            current = session.get_playback_info().is_shuffle_active
+        except Exception:
+            current = None
+        new_value = not bool(current) if current is not None else True
+        try:
+            session.try_change_shuffle_active_async(new_value)
+        except Exception:
+            pass
+
+    def _cycle_repeat(self, session):
+        # None -> List -> Track -> None (matches Apple Music's button order)
+        next_mode = {0: 2, 2: 1, 1: 0}
+        try:
+            current = int(session.get_playback_info().auto_repeat_mode)
+        except Exception:
+            current = 0
+        target = next_mode.get(current, 2)
+        try:
+            session.try_change_auto_repeat_mode_async(target)
+        except Exception:
+            pass
 
     def save_setting(self, key, value):
         self.settings[key] = value

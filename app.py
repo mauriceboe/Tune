@@ -25,7 +25,7 @@ from pathlib import Path
 
 APP_NAME = "Tune"
 APP_DISPLAY_NAME = "Tune"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 APP_AUMID = "dev.maurice.tune"
 
 DISCORD_CLIENT_ID = os.environ.get("TUNE_DISCORD_CLIENT_ID", "861702238472241162")
@@ -340,20 +340,40 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _setup_webview_data_dir() -> Path:
+    """Provide a single shared WebView2 user-data folder.
+
+    Now that we enforce single-instance via taskkill at startup, any
+    previous Tune is guaranteed to be gone before we touch this folder,
+    so a per-PID dir is no longer needed and just accumulated stale
+    profiles and Edge lock files. We also drop the old per-PID dirs
+    from earlier versions so they don't bloat AppData forever.
+    """
     base = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME / "WebView2"
     base.mkdir(parents=True, exist_ok=True)
+    # Cleanup of legacy per-PID profiles from previous Tune builds.
     for child in base.iterdir():
-        if not child.is_dir() or not child.name.startswith("pid-"):
-            continue
-        try:
-            old_pid = int(child.name[4:])
-        except ValueError:
-            continue
-        if not _pid_alive(old_pid):
+        if child.is_dir() and child.name.startswith("pid-"):
             shutil.rmtree(child, ignore_errors=True)
-    my_dir = base / f"pid-{os.getpid()}"
-    my_dir.mkdir(exist_ok=True)
-    return my_dir
+    shared = base / "data"
+    shared.mkdir(exist_ok=True)
+    # If a stale Edge lock file is left over from a hard crash it can
+    # block WebView2's init forever. The single-instance taskkill above
+    # guarantees no other Tune holds it at this point, so it's safe to
+    # clear them — but Windows may take a beat to release the handles
+    # after the kill, so retry a couple of times.
+    lock_names = ("LOCK", "lockfile", "Singleton", "SingletonCookie", "SingletonLock", "SingletonSocket")
+    for attempt in range(5):
+        unlocked = True
+        for lock_name in lock_names:
+            for stale in shared.rglob(lock_name):
+                try:
+                    stale.unlink()
+                except Exception:
+                    unlocked = False
+        if unlocked:
+            break
+        time.sleep(0.15)
+    return shared
 
 
 _WV2_DATA = _setup_webview_data_dir()
@@ -1771,7 +1791,10 @@ def main():
         js_api=api,
     )
 
+    loaded_event = threading.Event()
+
     def on_loaded():
+        loaded_event.set()
         _startup_log("webview: window loaded")
         # Window handle is not always available immediately after the JS loaded
         # event fires, so retry a few times across the first few seconds.
@@ -1789,6 +1812,30 @@ def main():
             except Exception:
                 pass
         _startup_log("webview: on_loaded complete")
+
+    def watchdog():
+        # If the WebView2 control hasn't reported the page as loaded within
+        # this budget, something has wedged the init (stale lock, stuck
+        # msedgewebview2, runtime missing). Self-kill so the user can simply
+        # relaunch — single-instance enforcement will give the new run a
+        # clean slate.
+        if loaded_event.wait(12.0):
+            return
+        _startup_log("watchdog: webview did not load in 12s, self-killing for a clean retry")
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                f"{APP_DISPLAY_NAME} could not finish starting (WebView2 init stalled).\n\n"
+                "Click OK and the app will close. Just launch it again — it should come up clean on the next try.\n\n"
+                f"Diagnostics: %APPDATA%\\{APP_NAME}\\startup.log",
+                APP_DISPLAY_NAME,
+                0x30,  # MB_ICONWARNING
+            )
+        except Exception:
+            pass
+        os._exit(2)
+
+    threading.Thread(target=watchdog, daemon=True).start()
 
     app.window.events.loaded += on_loaded
     _startup_log("webview: starting event loop")

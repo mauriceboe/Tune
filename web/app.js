@@ -161,10 +161,6 @@ function renderTrack(track) {
     paintWaveform(0);
     ui.timeNow.textContent = "0:00";
     ui.timeRemain.textContent = "-0:00";
-    ui.miniBarTitle.textContent = "Not playing";
-    ui.miniBarArtist.textContent = "—";
-    ui.miniBarTime.textContent = "0:00";
-    ui.miniBarCover.style.backgroundImage = "";
     setIcon(false);
     setShuffleState(false);
     setRepeatState("none");
@@ -185,8 +181,6 @@ function renderTrack(track) {
     ui.artist.classList.remove("title-fade");
     void ui.artist.offsetWidth;
     ui.artist.classList.add("title-fade");
-    ui.miniBarTitle.textContent = track.title || "—";
-    ui.miniBarArtist.textContent = track.artist || "";
     buildWaveform(newKey);
   }
 
@@ -195,7 +189,6 @@ function renderTrack(track) {
       ui.cover.dataset.coverSig = track.cover_data_url;
       ui.cover.style.backgroundImage = `url("${track.cover_data_url}")`;
       ui.backdrop.style.backgroundImage = `url("${track.cover_data_url}")`;
-      ui.miniBarCover.style.backgroundImage = `url("${track.cover_data_url}")`;
       ui.cover.classList.add("has-art");
       ui.cover.classList.remove("swap");
       void ui.cover.offsetWidth;
@@ -205,7 +198,6 @@ function renderTrack(track) {
     ui.cover.classList.remove("has-art");
     ui.cover.style.backgroundImage = "";
     ui.backdrop.style.backgroundImage = "";
-    ui.miniBarCover.style.backgroundImage = "";
     ui.cover.dataset.coverSig = "";
   }
 
@@ -213,6 +205,27 @@ function renderTrack(track) {
   setIcon(track.playing);
   setShuffleState(!!track.shuffle);
   setRepeatState(track.repeat || "none");
+}
+
+function renderMiniBar(recents) {
+  // recents[0] is the currently playing track. The "last played" entry is
+  // therefore recents[1] — the most recent track that wasn't this one.
+  const last = (recents && recents.length > 1) ? recents[1] : null;
+  const bar = $("miniBar");
+  if (!last) {
+    bar.classList.add("empty");
+    ui.miniBarTitle.textContent = "—";
+    ui.miniBarArtist.textContent = "Nothing yet this session";
+    ui.miniBarTime.textContent = "";
+    ui.miniBarCover.style.backgroundImage = "";
+    return;
+  }
+  bar.classList.remove("empty");
+  ui.miniBarTitle.textContent = last.title || "—";
+  ui.miniBarArtist.textContent = last.artist || "";
+  ui.miniBarTime.textContent = last.duration ? fmtTime(last.duration) : "";
+  // Recent entries don't carry cover bytes — keep the slot styled but blank.
+  ui.miniBarCover.style.backgroundImage = "";
 }
 
 function setShuffleState(active) {
@@ -235,7 +248,6 @@ function tickProgress() {
     paintWaveform(ratio);
     ui.timeNow.textContent = fmtTime(elapsed);
     ui.timeRemain.textContent = `-${fmtTime(Math.max(0, t.duration - elapsed))}`;
-    ui.miniBarTime.textContent = fmtTime(elapsed);
     if (state.tab === "lyrics") highlightLyric(elapsed);
   }
 }
@@ -334,7 +346,10 @@ window.__app = {
       state.track = u.track;
       renderTrack(u.track);
     }
-    if (u.recents) renderRecents(u.recents);
+    if (u.recents) {
+      renderRecents(u.recents);
+      renderMiniBar(u.recents);
+    }
     if (u.stats) renderStats(u.stats);
     if (u.history) renderHistory(u.history);
     if ("lyrics_for" in u) {

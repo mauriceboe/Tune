@@ -25,7 +25,7 @@ from pathlib import Path
 
 APP_NAME = "Tune"
 APP_DISPLAY_NAME = "Tune"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 APP_AUMID = "dev.maurice.tune"
 
 DISCORD_CLIENT_ID = os.environ.get("TUNE_DISCORD_CLIENT_ID", "861702238472241162")
@@ -1491,7 +1491,9 @@ class AppController:
         self.is_mini = not self.is_mini
         if self.window:
             try:
-                self.window.resize(*( (380, 480) if self.is_mini else (560, 800) ))
+                # Mini window is sized to fit cover + meta + controls + bottom bar
+                # so there is no dead space below the controls.
+                self.window.resize(*( (380, 360) if self.is_mini else (560, 800) ))
             except Exception:
                 pass
             self.window.evaluate_js(f"window.__app.setMini({'true' if self.is_mini else 'false'})")

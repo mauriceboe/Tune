@@ -75,11 +75,12 @@ jobs:
 
       - name: Build Python sidecar (tune-backend.exe)
         run: |
-          pyinstaller --onefile --noconsole --name tune-backend `
+          pyinstaller --onefile --name tune-backend `
             --collect-all winsdk --collect-all PIL `
+            --collect-submodules backend `
             --distpath dist-backend `
             -p . `
-            backend/__main__.py
+            tune_backend_launcher.py
 
       - name: Place sidecar binary for Tauri
         shell: pwsh

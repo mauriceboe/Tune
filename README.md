@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="web/logo-256.png" alt="Tune" height="120" />
+<img src="docs/logo-256.png" alt="Tune" height="120" />
 
 # Tune
 
@@ -28,123 +28,66 @@ Discord Rich Presence for Apple Music on Windows — with synced lyrics, listeni
   <a href="docs/screenshots/now-playing.png"><img src="docs/screenshots/now-playing.png" alt="Now playing" width="32%" /></a>
   <a href="docs/screenshots/stats.png"><img src="docs/screenshots/stats.png" alt="Stats" width="32%" /></a>
   <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Settings" width="32%" /></a>
-  <br />
-  <a href="docs/screenshots/red.png"><img src="docs/screenshots/red.png" alt="Red accent" width="32%" /></a>
-  <a href="docs/screenshots/stats-monochrome.png"><img src="docs/screenshots/stats-monochrome.png" alt="Monochrome accent" width="32%" /></a>
-</div>
-
-<br />
-
-<div align="center">
-
-### On Discord
-
-<a href="docs/screenshots/discord-profile.png"><img src="docs/screenshots/discord-profile.png" alt="Discord profile with Tune" width="38%" /></a>
-&nbsp;
-<a href="docs/screenshots/discord-presence.png"><img src="docs/screenshots/discord-presence.png" alt="Discord Rich Presence card" width="56%" /></a>
-
 </div>
 
 ---
 
 ## What you get
 
-<table>
-<tr>
-<td width="50%" valign="top">
+- **Live Discord Rich Presence** — title, artist, album, progress, real album art, and "Listening to Apple Music" header
+- **Synced lyrics** from LRCLIB, highlighted in time
+- **Listening stats** — daily totals, top artist, last 80 plays
+- **Liquid Glass UI** — backdrop blur, dynamic accent from the cover, parallax cover, animated backdrop, waveform progress
+- **Mini player** with a fixed bottom bar showing your last played track
+- **System tray** — media controls, show/hide, update check
+- **Auto-updates** straight from GitHub Releases, with progress in Settings
+- **Autostart**, **always-on-top**, **frameless resizable window**
 
-#### Discord
+## Get started
 
-- **Live Rich Presence** — title, artist, album, progress bar, real cover art
-- **"Listening to" status** — uses the Discord Listening activity type
-- **Quick links** — `Search on YouTube` and `Search on Spotify` buttons next to your status
-- **Real album covers** — uploaded once and cached, so Discord shows the exact art that's playing — not a guess from a search API
+1. Download the latest **Tune-x.y.z-setup.exe** from [Releases](https://github.com/mauriceboe/Tune/releases/latest)
+2. Run the installer — installs to `%LOCALAPPDATA%\Programs\Tune\` (per-user, no admin)
+3. Open Apple Music, hit play, and Discord lights up
 
-</td>
-<td width="50%" valign="top">
-
-#### Liquid Glass UI
-
-- **Album-tinted backdrop** — full-window blurred cover art behind every screen
-- **Dynamic accent** — progress bar, switches and highlights pull the dominant colour from the cover
-- **Glass cards** — real `backdrop-filter` blur via Edge WebView2, not a fake gradient
-- **Mini player** — toggleable compact mode for a corner of your screen
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-#### Lyrics & history
-
-- **Synced lyrics** — fetched from [LRCLIB](https://lrclib.net), highlighted in time, auto-scrolling
-- **Per-day stats** — listening time, track count, top artist
-- **History** — last 80 plays with timestamps
-- **Recently played** — eight most-recent unique tracks at a glance
-
-</td>
-<td width="50%" valign="top">
-
-#### Quality of life
-
-- **One-click install** — first launch asks for confirmation, copies into `%LOCALAPPDATA%\Programs\Tune\`, creates a Start Menu shortcut, and registers under *Settings → Apps → Installed apps* so you can uninstall the regular Windows way
-- **Auto-updates** — checks GitHub Releases in the background, downloads new builds, verifies the SHA-256, and swaps the EXE on next quit
-- **System tray** — with play/pause, next, previous, an update item, and quick show/hide
-- **Autostart** — optional Windows-startup launch
-- **Always on top** — keep the player above other windows
-- **Frameless + resizable** — drag any edge to resize
-
-</td>
-</tr>
-</table>
-
-<br />
-
-## Get started in 30 seconds
-
-1. **Download** the latest `Tune.exe` from [Releases](https://github.com/mauriceboe/Tune/releases/latest)
-2. **Double-click** — Tune asks once whether to install, then copies itself into your user profile, pins a Start Menu entry, and registers under *Settings → Apps → Installed apps*
-3. **Open Apple Music**, hit play, and watch your Discord status update
-
-> No admin rights required. No Microsoft Store. From the next launch onward, Tune updates itself in the background — new releases on GitHub get downloaded, SHA-256 verified, and applied the next time you quit the app.
-
-## Uninstall
-
-Open *Settings → Apps → Installed apps* (or *Programs and Features* on Windows 10), pick **Tune**, and click *Uninstall*. Your settings, history and artwork cache in `%APPDATA%\Tune\` are kept; delete that folder by hand if you want them gone too.
-
-<br />
+> Tune appears under *Settings → Apps → Installed apps* and can be uninstalled the regular Windows way. Settings, history and artwork cache live in `%APPDATA%\Tune\` and are kept across updates and reinstalls.
 
 ## How it works
 
-Tune doesn't talk to Apple Music directly — it reads the **Windows System Media Transport Controls (SMTC)** the same surface that powers the system volume overlay and the lock screen. Whatever Apple Music tells Windows it's playing, Tune sees:
+Two processes:
 
-- Title, artist, album, position, duration
-- The actual album thumbnail rendered by Apple Music
+- **The Tauri shell** (Rust) owns the window, the system tray, the WebView2 surface that paints the Liquid Glass UI, the auto-updater, and the JS↔backend bridge. Single-instance enforced.
+- **A Python sidecar** (`tune-backend.exe`) reads the Windows System Media Transport Controls every second, talks to Discord IPC, fetches lyrics from [LRCLIB](https://lrclib.net), uploads cover art to [catbox.moe](https://catbox.moe) so Discord shows the exact image, and stores history.
 
-Cover art is hashed and uploaded once to [catbox.moe](https://catbox.moe) so Discord can show the exact image. Each unique cover uploads only one time — subsequent plays of the same album hit the local cache.
+They communicate over line-delimited JSON-RPC on stdin/stdout. The sidecar is bundled with the installer; the user never sees it.
 
-Synced lyrics come from [LRCLIB](https://lrclib.net), a free community lyrics database — no API key, no account.
+## Build from source
 
-Auto-updates poll `api.github.com/repos/mauriceboe/Tune/releases/latest` every six hours. When a newer non-prerelease tag is found, Tune downloads `Tune.exe` and `Tune.exe.sha256` from that release, verifies the checksum, stages the new binary as `Tune.exe.new`, and writes a small batch script that swaps the files and relaunches once you quit. The check can be disabled in settings, and it never runs when you're developing from source.
+You'll need:
 
-<br />
+- Python 3.12+
+- Rust stable
+- Node 22+
 
-## Tech stack
+```powershell
+# 1. Build the Python sidecar
+python -m pip install -r requirements.txt
+python -m pip install pyinstaller
+pyinstaller --onefile --noconsole --name tune-backend `
+  --collect-all winsdk --collect-all PIL `
+  --distpath dist-backend backend/__main__.py
 
-<div align="center">
+# 2. Drop it where Tauri expects it
+mkdir src-tauri\binaries -ErrorAction SilentlyContinue
+copy dist-backend\tune-backend.exe src-tauri\binaries\tune-backend-x86_64-pc-windows-msvc.exe
 
-![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=flat-square&logo=python&logoColor=white)
-![WebView2](https://img.shields.io/badge/WebView2-0078D4?style=flat-square&logo=microsoftedge&logoColor=white)
-![Pywebview](https://img.shields.io/badge/pywebview-4B8BBE?style=flat-square)
-![Discord RPC](https://img.shields.io/badge/Discord_RPC-5865F2?style=flat-square&logo=discord&logoColor=white)
-![SMTC](https://img.shields.io/badge/SMTC-0078D4?style=flat-square&logo=windows&logoColor=white)
-![PyInstaller](https://img.shields.io/badge/PyInstaller-FFD43B?style=flat-square)
+# 3. Build the Tauri app
+npm install
+npm run build -- --target x86_64-pc-windows-msvc
+```
 
-</div>
+Output: `src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\Tune-x.y.z-setup.exe`
 
-The Python backend handles SMTC polling, Discord RPC, lyrics, history, and artwork hosting. The frontend is a single HTML/CSS/JS file rendered through Edge WebView2 — that's where the real liquid glass effects come from (`backdrop-filter`, `box-shadow`, dynamic CSS variables for the accent colour).
-
-<br />
+For dev iteration on the frontend you can run the sidecar in a terminal and the Tauri host with `npm run dev`.
 
 ## Privacy
 
@@ -153,8 +96,7 @@ Tune runs locally and stores everything in `%APPDATA%\Tune\`:
 - `settings.json` — your preferences
 - `history.json` — your play history (never sent anywhere)
 - `artwork_cache.json` — a `sha256 → catbox.moe url` map
-
-The auto-updater fetches release metadata from GitHub (`api.github.com`) and downloads new builds from `github.com/mauriceboe/Tune/releases`. No identifiers other than a `User-Agent` of `Tune/<version>` are sent.
+- `backend.log` — diagnostic log of the Python sidecar
 
 Data leaves your machine in only three cases, all triggered by playback:
 
@@ -162,45 +104,11 @@ Data leaves your machine in only three cases, all triggered by playback:
 - **Lyrics** are looked up at lrclib.net using the artist + title.
 - **Discord Rich Presence** is sent to your local Discord client over an IPC socket.
 
-Nothing is sent to a Tune server because there is no Tune server.
-
-<br />
-
-## Build from source
-
-```powershell
-python -m pip install -r requirements.txt
-python -m PyInstaller --onefile --windowed --icon=icon.ico `
-  --name Tune --collect-all winsdk --collect-all webview `
-  --collect-all pystray --collect-all PIL `
-  --add-data "web;web" --add-data "icon.ico;." app.py
-```
-
-The build drops a single `Tune.exe` (~43 MB) in `dist\`.
-
-For local development without building:
-
-```powershell
-python app.py
-```
-
-<br />
-
-## Configuration
-
-Tune ships with a public Discord application ID so it works out of the box. To use your own:
-
-1. Create an application at <https://discord.com/developers/applications>
-2. Set environment variable: `setx TUNE_DISCORD_CLIENT_ID 1234567890`
-3. Restart Tune
-
-<br />
+The auto-updater fetches release metadata from `api.github.com` and downloads new installers from `github.com/mauriceboe/Tune/releases`. No identifiers other than a `User-Agent` of `Tune/<version>` are sent.
 
 ## Disclaimer
 
 Tune is an unofficial third-party tool. It is not affiliated with, endorsed by, or sponsored by Apple Inc., Discord Inc., or LRCLIB. *Apple Music* is a trademark of Apple Inc.
-
-<br />
 
 ## License
 

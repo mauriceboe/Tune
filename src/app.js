@@ -1,5 +1,11 @@
 "use strict";
 
+// Tauri 2 globals exposed via withGlobalTauri:true in tauri.conf.json.
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const { getCurrentWindow } = window.__TAURI__.window;
+const appWindow = getCurrentWindow();
+
 const state = {
   tab: "now",
   isMini: false,
@@ -10,6 +16,7 @@ const state = {
   accent: "#fc3c44",
   recentSig: "",
   historySig: "",
+  recents: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -53,56 +60,17 @@ const ui = {
   updateError: $("updateError"),
 };
 
-const WAVEFORM_BARS = 56;
-
-function hashSeed(str) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h >>> 0;
-}
-
-function mulberry32(seed) {
-  let t = seed >>> 0;
-  return function () {
-    t = (t + 0x6D2B79F5) >>> 0;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function buildWaveform(seedKey) {
-  const rng = mulberry32(hashSeed(seedKey || "tune"));
-  const frag = document.createDocumentFragment();
-  for (let i = 0; i < WAVEFORM_BARS; i++) {
-    // Cluster heights so the result reads like an audio envelope, not noise.
-    const base = 0.25 + 0.35 * Math.abs(Math.sin((i / WAVEFORM_BARS) * Math.PI * 2.6));
-    const jitter = (rng() - 0.5) * 0.55;
-    const h = Math.max(0.18, Math.min(1, base + jitter));
-    const bar = document.createElement("div");
-    bar.className = "wf-bar";
-    bar.style.setProperty("--h", `${(h * 100).toFixed(1)}%`);
-    frag.appendChild(bar);
-  }
-  ui.waveform.innerHTML = "";
-  ui.waveform.appendChild(frag);
-}
-
-function paintWaveform(ratio) {
-  const bars = ui.waveform.children;
-  const n = bars.length;
-  if (!n) return;
-  const headIdx = Math.min(n - 1, Math.max(0, Math.floor(ratio * n)));
-  for (let i = 0; i < n; i++) {
-    const b = bars[i];
-    b.classList.toggle("played", i < headIdx);
-    b.classList.toggle("head", i === headIdx);
+// ---- RPC helper ----
+async function rpc(method, params = {}) {
+  try {
+    return await invoke("rpc", { method, params });
+  } catch (e) {
+    console.error(`rpc(${method})`, e);
+    return null;
   }
 }
 
+// ---- formatting helpers ----
 function fmtTime(s) {
   s = Math.max(0, Math.floor(s || 0));
   if (s >= 3600) {
@@ -117,6 +85,13 @@ function fmtDurationHuman(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   if (h) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+function fmtBytes(n) {
+  if (!n || n < 0) return "0";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 const ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
@@ -150,6 +125,57 @@ document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => showTab(t.dataset.tab));
 });
 
+// ---- waveform ----
+const WAVEFORM_BARS = 56;
+
+function hashSeed(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  let t = seed >>> 0;
+  return function () {
+    t = (t + 0x6D2B79F5) >>> 0;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function buildWaveform(seedKey) {
+  const rng = mulberry32(hashSeed(seedKey || "tune"));
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < WAVEFORM_BARS; i++) {
+    const base = 0.25 + 0.35 * Math.abs(Math.sin((i / WAVEFORM_BARS) * Math.PI * 2.6));
+    const jitter = (rng() - 0.5) * 0.55;
+    const h = Math.max(0.18, Math.min(1, base + jitter));
+    const bar = document.createElement("div");
+    bar.className = "wf-bar";
+    bar.style.setProperty("--h", `${(h * 100).toFixed(1)}%`);
+    frag.appendChild(bar);
+  }
+  ui.waveform.innerHTML = "";
+  ui.waveform.appendChild(frag);
+}
+
+function paintWaveform(ratio) {
+  const bars = ui.waveform.children;
+  const n = bars.length;
+  if (!n) return;
+  const headIdx = Math.min(n - 1, Math.max(0, Math.floor(ratio * n)));
+  for (let i = 0; i < n; i++) {
+    const b = bars[i];
+    b.classList.toggle("played", i < headIdx);
+    b.classList.toggle("head", i === headIdx);
+  }
+}
+
+// ---- track render ----
 function renderTrack(track) {
   if (!track) {
     ui.title.textContent = "Not playing";
@@ -208,10 +234,8 @@ function renderTrack(track) {
 }
 
 function renderMiniBar(recents) {
-  // recents[0] is the currently playing track. The "last played" entry is
-  // therefore recents[1] — the most recent track that wasn't this one.
   const last = (recents && recents.length > 1) ? recents[1] : null;
-  const bar = $("miniBar");
+  const bar = ui.miniBar;
   if (!last) {
     bar.classList.add("empty");
     ui.miniBarTitle.textContent = "—";
@@ -224,7 +248,6 @@ function renderMiniBar(recents) {
   ui.miniBarTitle.textContent = last.title || "—";
   ui.miniBarArtist.textContent = last.artist || "";
   ui.miniBarTime.textContent = last.duration ? fmtTime(last.duration) : "";
-  // Recent entries don't carry cover bytes — keep the slot styled but blank.
   ui.miniBarCover.style.backgroundImage = "";
 }
 
@@ -250,6 +273,11 @@ function tickProgress() {
     ui.timeRemain.textContent = `-${fmtTime(Math.max(0, t.duration - elapsed))}`;
     if (state.tab === "lyrics") highlightLyric(elapsed);
   }
+}
+
+// ---- recents / history / stats / lyrics ----
+function escape(s) {
+  return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
 }
 
 function renderRecents(items) {
@@ -286,10 +314,6 @@ function renderHistory(items) {
     row.innerHTML = `<span class="dot"></span><span class="text">${escape(e.title)} · ${escape(e.artist)}</span><span class="time">${time}</span>`;
     ui.historyList.appendChild(row);
   }
-}
-
-function escape(s) {
-  return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
 }
 
 function renderLyrics(lines) {
@@ -338,75 +362,179 @@ function renderStats(s) {
   ui.statTop.textContent = s.top_artist || "—";
 }
 
-window.__app = {
-  push(updateJson) {
-    const u = typeof updateJson === "string" ? JSON.parse(updateJson) : updateJson;
-    if (u.status !== undefined) setStatus(u.status, u.discord_on);
-    if ("track" in u) {
-      state.track = u.track;
-      renderTrack(u.track);
-    }
-    if (u.recents) {
-      renderRecents(u.recents);
-      renderMiniBar(u.recents);
-    }
-    if (u.stats) renderStats(u.stats);
-    if (u.history) renderHistory(u.history);
-    if ("lyrics_for" in u) {
-      if (u.lyrics_for === state.trackKey) renderLyrics(u.lyrics);
-    }
-    if (u.update) renderUpdate({ ...updateState, ...u.update });
-    tickProgress();
-  },
-  setMini(mini) {
-    state.isMini = mini;
-    document.body.classList.toggle("mini", mini);
-  },
-  setSettings(s) {
-    if (s.show_on_discord !== undefined) $("setDiscord").checked = !!s.show_on_discord;
-    if (s.minimize_to_tray !== undefined) $("setTray").checked = !!s.minimize_to_tray;
-    if (s.start_minimized !== undefined) $("setStartMin").checked = !!s.start_minimized;
-    if (s.always_on_top !== undefined) $("setAOT").checked = !!s.always_on_top;
-    if (s.autostart !== undefined) $("setAutostart").checked = !!s.autostart;
-    if (s.auto_check_updates !== undefined) $("setAutoUpdate").checked = !!s.auto_check_updates;
-    if (s.version) {
-      ui.appVersion.textContent = s.version;
-      if (ui.updateCurrent) ui.updateCurrent.textContent = s.version;
-    }
-    pollUpdateState();
-  },
-};
+// ---- update panel ----
+const updateState = { kind: "idle", active: false, pending: false };
 
-// progress tick every 500ms
-setInterval(tickProgress, 500);
+function renderUpdate(s) {
+  Object.assign(updateState, s || {});
+  if (s.current && ui.updateCurrent) ui.updateCurrent.textContent = s.current;
 
-function call(method, ...args) {
-  if (window.pywebview && window.pywebview.api && window.pywebview.api[method]) {
-    return window.pywebview.api[method](...args);
+  const kind = s.kind || "idle";
+  const v = s.version || s.tag || "";
+  const headline = ui.updateHeadline;
+  const sub = ui.updateSubline;
+  const btn = ui.updateBtn;
+
+  headline.classList.remove("is-ready", "is-error");
+  ui.updateError.hidden = true;
+  ui.updateProgressWrap.hidden = true;
+  btn.classList.remove("is-primary");
+  btn.disabled = false;
+
+  switch (kind) {
+    case "ready":
+      headline.textContent = `Update v${v} ready to install`;
+      headline.classList.add("is-ready");
+      sub.textContent = "Tune will close and relaunch on the new version.";
+      btn.textContent = "Restart & install";
+      btn.classList.add("is-primary");
+      break;
+    case "downloading":
+      headline.textContent = `Downloading update v${v}…`;
+      sub.textContent = "Hang tight — this won't take long.";
+      btn.textContent = "Downloading…";
+      btn.disabled = true;
+      ui.updateProgressWrap.hidden = false;
+      const pct = typeof s.progress === "number" ? s.progress : 0;
+      ui.updateProgressFill.style.width = `${pct}%`;
+      ui.updateProgressPct.textContent = `${pct}%`;
+      ui.updateProgressBytes.textContent = `${fmtBytes(s.bytes || 0)} / ${fmtBytes(s.total || 0)}`;
+      break;
+    case "checking":
+      headline.textContent = "Checking for updates…";
+      sub.textContent = "Talking to GitHub.";
+      btn.textContent = "Checking…";
+      btn.disabled = true;
+      break;
+    case "available":
+      headline.textContent = `Update v${v} available`;
+      sub.textContent = `Will download automatically.`;
+      btn.textContent = "Download now";
+      break;
+    case "up_to_date":
+      headline.textContent = "You're on the latest version";
+      sub.textContent = `Current version v${s.current || updateState.current || "—"}.`;
+      btn.textContent = "Check again";
+      break;
+    case "error":
+      headline.textContent = "Update failed";
+      headline.classList.add("is-error");
+      sub.textContent = "Click to retry.";
+      btn.textContent = "Retry";
+      ui.updateError.hidden = false;
+      ui.updateError.textContent = String(s.error || "unknown error");
+      break;
+    default:
+      headline.textContent = "Updates";
+      sub.textContent = `Current version v${s.current || updateState.current || "—"}.`;
+      btn.textContent = "Check now";
   }
-  return Promise.resolve(null);
 }
 
-$("btnPlay").addEventListener("click", () => call("media_action", "toggle"));
-$("btnPrev").addEventListener("click", () => call("media_action", "prev"));
-$("btnNext").addEventListener("click", () => call("media_action", "next"));
-$("btnShuffle").addEventListener("click", () => call("media_action", "shuffle_toggle"));
-$("btnRepeat").addEventListener("click", () => call("media_action", "repeat_cycle"));
-$("btnMini").addEventListener("click", () => call("toggle_mini"));
-$("btnMin").addEventListener("click", () => call("minimize"));
-$("btnClose").addEventListener("click", () => call("close_window"));
+ui.updateBtn.addEventListener("click", async () => {
+  if (updateState.kind === "ready") {
+    await invoke("install_update");
+    return;
+  }
+  await invoke("check_for_updates");
+});
 
-// ---- Cover parallax (subtle 3D tilt + glare on hover) ----
+// ---- backend events ----
+listen("backend://event", (e) => {
+  const u = e.payload;
+  if (!u) return;
+  if (u.event === "tick") {
+    const d = u.data || {};
+    if (d.status !== undefined) setStatus(d.status, d.discord_on);
+    if ("track" in d) {
+      state.track = d.track;
+      renderTrack(d.track);
+    }
+    if (d.recents) {
+      state.recents = d.recents;
+      renderRecents(d.recents);
+      renderMiniBar(d.recents);
+    }
+    if (d.stats) renderStats(d.stats);
+    if (d.history) renderHistory(d.history);
+    tickProgress();
+  } else if (u.event === "lyrics") {
+    if (u.data && u.data.key === state.trackKey) renderLyrics(u.data.lines);
+  } else if (u.event === "ready") {
+    const d = u.data || {};
+    applySettings(d.settings || {});
+    if (d.version) {
+      ui.appVersion.textContent = d.version;
+      if (ui.updateCurrent) ui.updateCurrent.textContent = d.version;
+    }
+  }
+});
+
+listen("update://event", (e) => {
+  if (e.payload) renderUpdate(e.payload);
+});
+
+// ---- settings wiring ----
+function applySettings(s) {
+  if (s.show_on_discord !== undefined) $("setDiscord").checked = !!s.show_on_discord;
+  if (s.minimize_to_tray !== undefined) $("setTray").checked = !!s.minimize_to_tray;
+  if (s.start_minimized !== undefined) $("setStartMin").checked = !!s.start_minimized;
+  if (s.always_on_top !== undefined) $("setAOT").checked = !!s.always_on_top;
+  if (s.autostart !== undefined) $("setAutostart").checked = !!s.autostart;
+  if (s.auto_check_updates !== undefined) $("setAutoUpdate").checked = !!s.auto_check_updates;
+}
+
+$("setDiscord").addEventListener("change", (e) => rpc("save_setting", { key: "show_on_discord", value: e.target.checked }));
+$("setTray").addEventListener("change", (e) => rpc("save_setting", { key: "minimize_to_tray", value: e.target.checked }));
+$("setStartMin").addEventListener("change", (e) => rpc("save_setting", { key: "start_minimized", value: e.target.checked }));
+$("setAOT").addEventListener("change", async (e) => {
+  await rpc("save_setting", { key: "always_on_top", value: e.target.checked });
+  await invoke("set_always_on_top", { enabled: e.target.checked });
+});
+$("setAutostart").addEventListener("change", (e) => invoke("set_autostart", { enabled: e.target.checked }));
+$("setAutoUpdate").addEventListener("change", (e) => rpc("save_setting", { key: "auto_check_updates", value: e.target.checked }));
+
+// ---- media buttons ----
+$("btnPlay").addEventListener("click", () => rpc("media_action", { action: "toggle" }));
+$("btnPrev").addEventListener("click", () => rpc("media_action", { action: "prev" }));
+$("btnNext").addEventListener("click", () => rpc("media_action", { action: "next" }));
+$("btnShuffle").addEventListener("click", () => rpc("media_action", { action: "shuffle_toggle" }));
+$("btnRepeat").addEventListener("click", () => rpc("media_action", { action: "repeat_cycle" }));
+$("btnMini").addEventListener("click", () => invoke("toggle_mini"));
+$("btnMin").addEventListener("click", () => appWindow.minimize());
+$("btnClose").addEventListener("click", () => appWindow.hide());
+
+// ---- waveform seek ----
+ui.waveform.addEventListener("click", (e) => {
+  const t = state.track;
+  if (!t || !t.duration) return;
+  const rect = ui.waveform.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  const targetSeconds = Math.floor(t.duration * ratio);
+  rpc("media_seek", { seconds: targetSeconds });
+});
+
+buildWaveform("tune");
+setInterval(tickProgress, 500);
+
+// ---- progress tick that polls update state on Settings tab ----
+setInterval(async () => {
+  if (state.tab === "settings") {
+    const s = await invoke("get_update_state");
+    if (s) renderUpdate(s);
+  }
+}, 600);
+
+// ---- cover parallax ----
 (function () {
   const cover = ui.cover;
   if (!cover) return;
-  // Add a glare overlay once.
   const glare = document.createElement("div");
   glare.className = "cover-glare";
   cover.appendChild(glare);
 
-  const MAX_TILT = 9;          // degrees
-  const MAX_LIFT = 14;          // px translateZ
+  const MAX_TILT = 9;
+  const MAX_LIFT = 14;
   let raf = null;
   let pending = null;
 
@@ -443,186 +571,12 @@ $("btnClose").addEventListener("click", () => call("close_window"));
   cover.addEventListener("blur", reset);
 })();
 
-// ---- Waveform click-to-seek (best effort; SMTC doesn't accept seek for all apps) ----
-ui.waveform.addEventListener("click", (e) => {
-  const t = state.track;
-  if (!t || !t.duration) return;
-  const rect = ui.waveform.getBoundingClientRect();
-  const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  const targetSeconds = Math.floor(t.duration * ratio);
-  call("media_action_seek", targetSeconds);
-});
-
-buildWaveform("tune");
-
-$("setDiscord").addEventListener("change", (e) => call("save_setting", "show_on_discord", e.target.checked));
-$("setTray").addEventListener("change", (e) => call("save_setting", "minimize_to_tray", e.target.checked));
-$("setStartMin").addEventListener("change", (e) => call("save_setting", "start_minimized", e.target.checked));
-$("setAOT").addEventListener("change", (e) => call("save_setting", "always_on_top", e.target.checked));
-$("setAutostart").addEventListener("change", (e) => call("set_autostart", e.target.checked));
-$("setAutoUpdate").addEventListener("change", (e) => call("save_setting", "auto_check_updates", e.target.checked));
-
-// ---- Update panel ----
-const updateState = { kind: "idle", active: false, pending: false };
-
-function fmtBytes(n) {
-  if (!n || n < 0) return "0";
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function renderUpdate(s) {
-  Object.assign(updateState, s || {});
-  if (s.current && ui.updateCurrent) ui.updateCurrent.textContent = s.current;
-
-  const kind = s.kind || "idle";
-  const v = s.version || s.tag || "";
-  const headline = ui.updateHeadline;
-  const sub = ui.updateSubline;
-  const btn = ui.updateBtn;
-
-  headline.classList.remove("is-ready", "is-error");
-  ui.updateError.hidden = true;
-  ui.updateProgressWrap.hidden = true;
-  btn.classList.remove("is-primary");
-  btn.disabled = false;
-
-  if (!s.active) {
-    headline.textContent = "Auto-update unavailable";
-    sub.textContent = "Tune is running from source — install the official EXE to enable updates.";
-    btn.disabled = true;
-    btn.textContent = "Check now";
-    return;
-  }
-
-  switch (kind) {
-    case "ready":
-      headline.textContent = `Update v${v} ready to install`;
-      headline.classList.add("is-ready");
-      sub.textContent = "Tune will close and relaunch on the new version.";
-      btn.textContent = "Restart & install";
-      btn.classList.add("is-primary");
-      break;
-    case "downloading":
-      headline.textContent = `Downloading update v${v}…`;
-      sub.textContent = "Hang tight — this won't take long.";
-      btn.textContent = "Downloading…";
-      btn.disabled = true;
-      ui.updateProgressWrap.hidden = false;
-      const pct = typeof s.progress === "number" ? s.progress : 0;
-      ui.updateProgressFill.style.width = `${pct}%`;
-      ui.updateProgressPct.textContent = `${pct}%`;
-      ui.updateProgressBytes.textContent = `${fmtBytes(s.bytes || 0)} / ${fmtBytes(s.total || 0)}`;
-      break;
-    case "verifying":
-      headline.textContent = `Verifying v${v}…`;
-      sub.textContent = "Checking the download integrity.";
-      btn.textContent = "Verifying…";
-      btn.disabled = true;
-      break;
-    case "checking":
-      headline.textContent = "Checking for updates…";
-      sub.textContent = "Talking to GitHub.";
-      btn.textContent = "Checking…";
-      btn.disabled = true;
-      break;
-    case "available":
-      headline.textContent = `Update v${v} available`;
-      sub.textContent = `Size: ${fmtBytes(s.size || 0)}. Will download automatically.`;
-      btn.textContent = "Download now";
-      break;
-    case "up_to_date":
-      headline.textContent = "You're on the latest version";
-      sub.textContent = `Current version v${s.current || updateState.current || "—"}.`;
-      btn.textContent = "Check again";
-      break;
-    case "error":
-      headline.textContent = "Update failed";
-      headline.classList.add("is-error");
-      sub.textContent = "Click to retry.";
-      btn.textContent = "Retry";
-      ui.updateError.hidden = false;
-      ui.updateError.textContent = String(s.error || "unknown error");
-      break;
-    default:
-      headline.textContent = "Updates";
-      sub.textContent = `Current version v${s.current || updateState.current || "—"}.`;
-      btn.textContent = "Check now";
-  }
-}
-
-ui.updateBtn.addEventListener("click", () => {
-  if (updateState.kind === "ready") {
-    call("install_update");
-    return;
-  }
-  call("check_for_updates");
-});
-
-async function pollUpdateState() {
-  const s = await call("get_update_state");
-  if (s) renderUpdate(s);
-}
-
-// Poll while the user is on the Settings tab to keep progress live.
-setInterval(() => {
-  if (state.tab === "settings") pollUpdateState();
-}, 600);
-
-window.addEventListener("pywebviewready", () => {
-  call("ready").then((s) => { if (s) window.__app.setSettings(s); });
-});
-
-document.addEventListener("click", (e) => {
-  const a = e.target.closest("a.ext-link");
-  if (!a) return;
-  e.preventDefault();
-  call("open_url", a.href);
-});
-
-// Frameless-window edge resize via Python bridge
-(function () {
-  let active = null;
-  let lastSent = 0;
-
-  function onMouseDown(e) {
-    const el = e.target.closest(".resize-edge");
-    if (!el) return;
+// ---- frameless resize ----
+const RESIZE_DIRS = { l: "West", r: "East", b: "South", br: "SouthEast", bl: "SouthWest" };
+document.querySelectorAll(".resize-edge").forEach(el => {
+  el.addEventListener("mousedown", (e) => {
     e.preventDefault();
-    active = {
-      mode: el.dataset.resize,
-      sx: e.screenX,
-      sy: e.screenY,
-      w: window.outerWidth,
-      h: window.outerHeight,
-    };
-    document.body.style.userSelect = "none";
-  }
-  function onMouseMove(e) {
-    if (!active) return;
-    const dx = e.screenX - active.sx;
-    const dy = e.screenY - active.sy;
-    let w = active.w, h = active.h;
-    let dragLeft = false;
-    if (active.mode.includes("r")) w = active.w + dx;
-    if (active.mode.includes("l")) { w = active.w - dx; dragLeft = true; }
-    if (active.mode.includes("b")) h = active.h + dy;
-    w = Math.max(380, Math.min(1600, w));
-    h = Math.max(460, Math.min(1400, h));
-    const now = performance.now();
-    if (now - lastSent < 32) return;
-    lastSent = now;
-    call("resize_window", Math.round(w), Math.round(h), dragLeft);
-  }
-  function onMouseUp() {
-    if (active) {
-      active = null;
-      document.body.style.userSelect = "";
-    }
-  }
-  document.addEventListener("mousedown", onMouseDown);
-  document.addEventListener("mousemove", onMouseMove);
-  document.addEventListener("mouseup", onMouseUp);
-  document.addEventListener("mouseleave", onMouseUp);
-})();
+    const dir = RESIZE_DIRS[el.dataset.resize];
+    if (dir) appWindow.startResizeDragging(dir).catch(() => {});
+  });
+});

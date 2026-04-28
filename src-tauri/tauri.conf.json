@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tune",
+  "version": "2.0.0",
+  "identifier": "dev.maurice.tune",
+  "build": {
+    "frontendDist": "../src",
+    "devUrl": null
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Tune",
+        "width": 560,
+        "height": 800,
+        "minWidth": 380,
+        "minHeight": 460,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false,
+        "backgroundColor": "#050507",
+        "shadow": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": false,
+      "tooltip": "Tune"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "publisher": "mauriceboe",
+    "category": "Music",
+    "shortDescription": "Discord Rich Presence for Apple Music",
+    "longDescription": "Discord Rich Presence for Apple Music on Windows, with synced lyrics, listening stats, and a Liquid Glass interface that mirrors the album you're playing.",
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "languages": ["English"]
+      },
+      "wix": null
+    },
+    "externalBin": ["binaries/tune-backend"],
+    "resources": []
+  }
+}

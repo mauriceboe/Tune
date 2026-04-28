@@ -25,7 +25,7 @@ from pathlib import Path
 
 APP_NAME = "Tune"
 APP_DISPLAY_NAME = "Tune"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 APP_AUMID = "dev.maurice.tune"
 
 DISCORD_CLIENT_ID = os.environ.get("TUNE_DISCORD_CLIENT_ID", "861702238472241162")
@@ -239,6 +239,18 @@ if "--uninstall" in sys.argv[1:]:
 
 if _self_install_if_needed():
     sys.exit(0)
+
+# We're now running as the user-facing instance. If a previous update attempt
+# left a Tune.exe.new or _update.bat in the install dir (because the swap
+# raced with another launch, or the user installed manually mid-update), get
+# rid of it before the periodic updater starts staging another one.
+if getattr(sys, "frozen", False) and Path(sys.executable).resolve() == INSTALLED_EXE.resolve():
+    for _stale in (INSTALL_DIR / f"{APP_NAME}.exe.new", INSTALL_DIR / "_update.bat"):
+        try:
+            if _stale.exists():
+                _stale.unlink()
+        except Exception:
+            pass
 
 # Set the AppUserModelID before any window is created so the taskbar groups
 # the application under our own icon instead of the host process icon.
@@ -818,6 +830,38 @@ def _parse_version(s: str) -> tuple:
     return tuple(parts) if parts else (0,)
 
 
+UPDATE_LOG_PATH = SETTINGS_DIR / "update.log"
+
+
+def _update_log(msg: str) -> None:
+    """Append a single line to the update log. Never raises."""
+    try:
+        SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(UPDATE_LOG_PATH, "a", encoding="utf-8") as f:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
+
+def cleanup_stale_update_artifacts() -> None:
+    """Remove leftover .new / .bat files from a previous update attempt.
+
+    Run on every start. If we're alive at this point, we're the binary the
+    user wants to run; any stray .new file is from an aborted swap and is
+    safe to nuke.
+    """
+    new_path = INSTALL_DIR / f"{APP_NAME}.exe.new"
+    bat_path = INSTALL_DIR / "_update.bat"
+    for p in (new_path, bat_path):
+        try:
+            if p.exists():
+                p.unlink()
+                _update_log(f"cleanup: removed stale {p.name}")
+        except Exception as e:
+            _update_log(f"cleanup: failed to remove {p.name}: {e}")
+
+
 class Updater:
     """Checks GitHub Releases for newer versions and swaps the EXE on quit.
 
@@ -826,12 +870,17 @@ class Updater:
     no-op so contributors don't get update prompts during development.
     """
 
+    DOWNLOAD_CHUNK = 64 * 1024
+    DOWNLOAD_PROGRESS_INTERVAL = 0.25  # seconds between progress callbacks
+    DOWNLOAD_RETRIES = 3
+
     def __init__(self, on_status):
         self.on_status = on_status
         self._lock = threading.Lock()
         self._busy = False
         self._latest: dict | None = None
         self._ready_swap_bat: Path | None = None
+        self._state: dict = {"kind": "idle"}
 
     def is_active(self) -> bool:
         return getattr(sys, "frozen", False) and EXE_PATH == INSTALLED_EXE
@@ -839,8 +888,18 @@ class Updater:
     def has_pending(self) -> bool:
         return self._ready_swap_bat is not None and self._ready_swap_bat.exists()
 
+    def state(self) -> dict:
+        return dict(self._state)
+
     def latest(self) -> dict | None:
-        return self._latest
+        return dict(self._latest) if self._latest else None
+
+    def _set_state(self, **fields):
+        self._state = fields
+        try:
+            self.on_status(dict(fields))
+        except Exception:
+            pass
 
     def start_periodic(self):
         if not self.is_active():
@@ -853,10 +912,51 @@ class Updater:
         while True:
             try:
                 self.check(silent=True, auto_download=True)
-            except Exception:
-                pass
+            except Exception as e:
+                _update_log(f"loop: {e}")
             time.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
 
+    # ---- public API ----
+
+    def check_async(self, auto_download: bool = True) -> bool:
+        """Kick off a check on a background thread. Returns False if already busy."""
+        with self._lock:
+            if self._busy:
+                return False
+            self._busy = True
+        threading.Thread(
+            target=self._run_check, args=(auto_download,), daemon=True
+        ).start()
+        return True
+
+    def _run_check(self, auto_download: bool):
+        try:
+            self._set_state(kind="checking")
+            info = self._fetch_latest()
+            if not info.get("ok"):
+                self._set_state(kind="error", error=info.get("error") or "fetch failed")
+                _update_log(f"check failed: {info.get('error')}")
+                return
+            if not info.get("available"):
+                self._set_state(kind="up_to_date", current=APP_VERSION)
+                _update_log(f"up to date (current={APP_VERSION}, latest={info.get('tag')})")
+                return
+            self._latest = {k: v for k, v in info.items() if k != "ok"}
+            _update_log(f"update available: {self._latest.get('version')}")
+            self._set_state(
+                kind="available",
+                version=self._latest.get("version"),
+                tag=self._latest.get("tag"),
+                size=self._latest.get("size", 0),
+                notes=self._latest.get("notes", ""),
+            )
+            if auto_download:
+                self._do_download()
+        finally:
+            with self._lock:
+                self._busy = False
+
+    # Legacy synchronous helpers kept for the periodic loop.
     def check(self, silent: bool = True, auto_download: bool = False) -> dict:
         with self._lock:
             if self._busy:
@@ -865,17 +965,21 @@ class Updater:
         try:
             info = self._fetch_latest()
             if not info.get("ok"):
-                if not silent:
-                    self.on_status({"kind": "error", "error": info.get("error", "fetch failed")})
+                self._set_state(kind="error", error=info.get("error") or "fetch failed")
                 return info
             if not info.get("available"):
-                if not silent:
-                    self.on_status({"kind": "up_to_date", "current": APP_VERSION})
+                self._set_state(kind="up_to_date", current=APP_VERSION)
                 return info
             self._latest = {k: v for k, v in info.items() if k != "ok"}
-            self.on_status({"kind": "available", **self._latest})
+            self._set_state(
+                kind="available",
+                version=self._latest.get("version"),
+                tag=self._latest.get("tag"),
+                size=self._latest.get("size", 0),
+                notes=self._latest.get("notes", ""),
+            )
             if auto_download:
-                self.download_and_apply()
+                self._do_download()
             return info
         finally:
             with self._lock:
@@ -927,78 +1031,190 @@ class Updater:
             "html_url": data.get("html_url") or "",
         }
 
-    def download_and_apply(self) -> dict:
+    # ---- download + verify + stage ----
+
+    def _do_download(self) -> dict:
         if not self._latest:
             return {"ok": False, "error": "no update info"}
         if not self.is_active():
             return {"ok": False, "error": "not installed"}
 
         new_path = INSTALL_DIR / f"{APP_NAME}.exe.new"
-        try:
-            self.on_status({"kind": "downloading", **self._latest})
+        url = self._latest["url"]
+        total = int(self._latest.get("size") or 0)
+        version = self._latest.get("version", "")
+        last_error = ""
 
-            req = urllib.request.Request(
-                self._latest["url"],
-                headers={"User-Agent": UPDATE_USER_AGENT},
-            )
-            INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-            with urllib.request.urlopen(req, timeout=120) as resp, open(new_path, "wb") as f:
-                shutil.copyfileobj(resp, f, length=1024 * 256)
-
-            sha_url = self._latest.get("sha256_url")
-            if sha_url:
-                req = urllib.request.Request(sha_url, headers={"User-Agent": UPDATE_USER_AGENT})
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    sha_text = resp.read().decode("utf-8", errors="replace").strip()
-                expected = sha_text.split()[0].lower() if sha_text else ""
-                if expected:
-                    h = hashlib.sha256()
-                    with open(new_path, "rb") as f:
-                        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                            h.update(chunk)
-                    actual = h.hexdigest().lower()
-                    if expected != actual:
-                        try:
-                            new_path.unlink()
-                        except Exception:
-                            pass
-                        self.on_status({"kind": "error", "error": "checksum mismatch"})
-                        return {"ok": False, "error": "checksum mismatch"}
-
-            swap_bat = self._write_swap_script(new_path, INSTALLED_EXE)
-            self._ready_swap_bat = swap_bat
-            self.on_status({"kind": "ready", **self._latest})
-            return {"ok": True, "swap_bat": str(swap_bat)}
-        except Exception as e:
+        for attempt in range(1, self.DOWNLOAD_RETRIES + 1):
             try:
-                new_path.unlink()
-            except Exception:
-                pass
-            self.on_status({"kind": "error", "error": str(e)})
-            return {"ok": False, "error": str(e)}
+                _update_log(f"download attempt {attempt}/{self.DOWNLOAD_RETRIES}: {url}")
+                self._set_state(
+                    kind="downloading",
+                    version=version,
+                    progress=0,
+                    bytes=0,
+                    total=total,
+                )
+                INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+                # Best-effort: clear any stale partial file before each attempt.
+                try:
+                    if new_path.exists():
+                        new_path.unlink()
+                except Exception:
+                    pass
+
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": UPDATE_USER_AGENT}
+                )
+                received = 0
+                last_emit = 0.0
+                with urllib.request.urlopen(req, timeout=30) as resp, open(new_path, "wb") as f:
+                    if total <= 0:
+                        try:
+                            total = int(resp.headers.get("Content-Length") or 0)
+                        except Exception:
+                            total = 0
+                    while True:
+                        chunk = resp.read(self.DOWNLOAD_CHUNK)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        received += len(chunk)
+                        now = time.time()
+                        if now - last_emit >= self.DOWNLOAD_PROGRESS_INTERVAL:
+                            last_emit = now
+                            pct = int((received / total) * 100) if total else 0
+                            self._set_state(
+                                kind="downloading",
+                                version=version,
+                                progress=pct,
+                                bytes=received,
+                                total=total,
+                            )
+
+                # Final 100% before we move on to verification.
+                self._set_state(
+                    kind="downloading",
+                    version=version,
+                    progress=100 if total else 0,
+                    bytes=received,
+                    total=total or received,
+                )
+
+                if total and received < total:
+                    raise IOError(f"truncated download: {received}/{total}")
+
+                self._set_state(kind="verifying", version=version)
+                if not self._verify_sha(new_path):
+                    raise IOError("checksum mismatch")
+
+                swap_bat = self._write_swap_script(new_path, INSTALLED_EXE)
+                self._ready_swap_bat = swap_bat
+                _update_log(f"staged update {version} ({received} bytes)")
+                self._set_state(kind="ready", version=version, size=received)
+                return {"ok": True, "swap_bat": str(swap_bat)}
+
+            except Exception as e:
+                last_error = str(e)
+                _update_log(f"download attempt {attempt} failed: {e}")
+                try:
+                    if new_path.exists():
+                        new_path.unlink()
+                except Exception:
+                    pass
+                if attempt < self.DOWNLOAD_RETRIES:
+                    time.sleep(2 * attempt)
+
+        self._set_state(kind="error", error=last_error or "download failed")
+        return {"ok": False, "error": last_error or "download failed"}
+
+    def _verify_sha(self, new_path: Path) -> bool:
+        sha_url = (self._latest or {}).get("sha256_url")
+        if not sha_url:
+            # No published checksum; accept the download as-is.
+            return True
+        try:
+            req = urllib.request.Request(sha_url, headers={"User-Agent": UPDATE_USER_AGENT})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                sha_text = resp.read().decode("utf-8", errors="replace").strip()
+        except Exception as e:
+            _update_log(f"verify: failed to fetch checksum: {e}")
+            return True  # don't fail the update for a flaky checksum endpoint
+        expected = sha_text.split()[0].lower() if sha_text else ""
+        if not expected:
+            return True
+        h = hashlib.sha256()
+        with open(new_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        actual = h.hexdigest().lower()
+        ok = expected == actual
+        if not ok:
+            _update_log(f"verify: sha mismatch (expected {expected[:16]}..., got {actual[:16]}...)")
+        return ok
 
     @staticmethod
     def _write_swap_script(new_exe: Path, target_exe: Path) -> Path:
+        """Write a self-deleting batch that replaces the EXE once the parent quits.
+
+        Improvements over v1:
+         - Logs to %APPDATA%\\Tune\\update.log so failures are visible.
+         - Uses the parent PID via wmic to wait for *that specific instance*
+           to exit, rather than matching any Tune.exe (which falsely matches
+           a relaunched copy of ourselves).
+         - Retries the move with backoff, then falls back to copy + delete.
+         - Always relaunches Tune.exe at the end, so the user is never left
+           without a running app.
+        """
         swap_bat = INSTALL_DIR / "_update.bat"
-        # Wait for the current process to release the EXE, swap, relaunch, self-delete.
+        log_path = UPDATE_LOG_PATH
+        parent_pid = os.getpid()
         content = (
             "@echo off\r\n"
-            "setlocal\r\n"
+            "setlocal EnableDelayedExpansion\r\n"
+            f'set "LOG={log_path}"\r\n'
+            f'set "PARENT_PID={parent_pid}"\r\n'
+            f'set "NEW_EXE={new_exe}"\r\n'
+            f'set "TARGET_EXE={target_exe}"\r\n'
+            f'set "INSTALL_DIR={INSTALL_DIR}"\r\n'
+            'echo [swap] start pid=%PARENT_PID% >> "%LOG%"\r\n'
             "set TRIES=0\r\n"
             ":wait\r\n"
-            f'tasklist /fi "imagename eq {APP_NAME}.exe" 2>nul | find /i "{APP_NAME}.exe" >nul\r\n'
+            'tasklist /fi "PID eq %PARENT_PID%" /nh 2>nul | find "%PARENT_PID%" >nul\r\n'
             "if errorlevel 1 goto swap\r\n"
             "set /a TRIES+=1\r\n"
-            "if %TRIES% GEQ 60 goto swap\r\n"
+            "if %TRIES% GEQ 90 goto force\r\n"
             "timeout /t 1 /nobreak >nul\r\n"
             "goto wait\r\n"
+            ":force\r\n"
+            'echo [swap] parent still alive after 90s, force-killing >> "%LOG%"\r\n'
+            'taskkill /pid %PARENT_PID% /f >nul 2>&1\r\n'
+            "timeout /t 2 /nobreak >nul\r\n"
             ":swap\r\n"
-            f'move /y "{new_exe}" "{target_exe}" >nul\r\n'
+            "set MOVE_TRIES=0\r\n"
+            ":swap_retry\r\n"
+            'move /y "%NEW_EXE%" "%TARGET_EXE%" >nul 2>&1\r\n'
+            "if not errorlevel 1 goto launch\r\n"
+            "set /a MOVE_TRIES+=1\r\n"
+            "if %MOVE_TRIES% GEQ 8 goto fallback\r\n"
+            'echo [swap] move failed, retry %MOVE_TRIES% >> "%LOG%"\r\n'
+            "timeout /t 1 /nobreak >nul\r\n"
+            "goto swap_retry\r\n"
+            ":fallback\r\n"
+            'echo [swap] move kept failing, falling back to copy+del >> "%LOG%"\r\n'
+            'copy /y "%NEW_EXE%" "%TARGET_EXE%" >nul 2>&1\r\n'
             "if errorlevel 1 (\r\n"
-            "  timeout /t 2 /nobreak >nul\r\n"
-            f'  move /y "{new_exe}" "{target_exe}" >nul\r\n'
+            '  echo [swap] copy fallback also failed; aborting >> "%LOG%"\r\n'
+            '  start "" "%TARGET_EXE%"\r\n'
+            "  goto cleanup\r\n"
             ")\r\n"
-            f'start "" "{target_exe}"\r\n'
+            'del /f /q "%NEW_EXE%" >nul 2>&1\r\n'
+            ":launch\r\n"
+            'echo [swap] swap successful, launching new build >> "%LOG%"\r\n'
+            'start "" "%TARGET_EXE%"\r\n'
+            ":cleanup\r\n"
+            'del /f /q "%NEW_EXE%" >nul 2>&1\r\n'
+            'echo [swap] done >> "%LOG%"\r\n'
             '(goto) 2>nul & del "%~f0"\r\n'
         )
         swap_bat.write_text(content, encoding="ascii")
@@ -1007,6 +1223,7 @@ class Updater:
     def trigger_swap_on_exit(self) -> bool:
         """Spawn the swap script. Caller must immediately exit so the EXE handle is released."""
         if not self.has_pending():
+            _update_log("trigger_swap: no pending swap_bat")
             return False
         DETACHED_PROCESS = 0x00000008
         CREATE_NO_WINDOW = 0x08000000
@@ -1017,8 +1234,10 @@ class Updater:
                 creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
                 close_fds=True,
             )
+            _update_log(f"trigger_swap: spawned {self._ready_swap_bat}")
             return True
-        except Exception:
+        except Exception as e:
+            _update_log(f"trigger_swap failed: {e}")
             return False
 
 
@@ -1052,6 +1271,9 @@ class Api:
 
     def check_for_updates(self):
         return self.app.check_for_updates()
+
+    def get_update_state(self):
+        return self.app.get_update_state()
 
     def install_update(self):
         return self.app.install_pending_update()
@@ -1128,7 +1350,23 @@ class AppController:
             self.updater.start_periodic()
 
     def check_for_updates(self) -> dict:
-        return self.updater.check(silent=False, auto_download=True)
+        """Kick off a non-blocking check. Returns immediately."""
+        if not self.updater.is_active():
+            return {"ok": False, "error": "running from source — auto-update disabled"}
+        if self.updater.has_pending():
+            # Surface the pending state so the UI shows "Restart to install".
+            self._on_updater_status({"kind": "ready", **(self.updater.latest() or {})})
+            return {"ok": True, "kind": "ready"}
+        ok = self.updater.check_async(auto_download=True)
+        return {"ok": ok, "kind": "checking" if ok else "busy"}
+
+    def get_update_state(self) -> dict:
+        return {
+            **self.updater.state(),
+            "active": self.updater.is_active(),
+            "pending": self.updater.has_pending(),
+            "current": APP_VERSION,
+        }
 
     def install_pending_update(self) -> bool:
         if not self.updater.has_pending():
@@ -1347,14 +1585,24 @@ class AppController:
         threading.Thread(target=self._tray_icon.run, daemon=True).start()
 
     def _tray_update_label(self) -> str:
-        kind = (self._update_state or {}).get("kind", "idle")
+        s = self._update_state or {}
+        kind = s.get("kind", "idle")
+        v = s.get("version") or s.get("tag") or ""
         if kind == "ready":
-            v = self._update_state.get("version") or self._update_state.get("tag", "")
-            return f"Restart to install update {v}".strip()
+            return f"Restart to install update v{v}".strip()
         if kind == "downloading":
+            pct = s.get("progress")
+            if isinstance(pct, int):
+                return f"Downloading update... {pct}%"
             return "Downloading update..."
-        if kind == "available":
-            return "Update available - download"
+        if kind == "verifying":
+            return "Verifying update..."
+        if kind == "checking":
+            return "Checking for updates..."
+        if kind == "error":
+            return "Update failed (click to retry)"
+        if kind == "up_to_date":
+            return "Up to date"
         return "Check for updates"
 
     def _tray_update_action(self, icon=None, item=None):
@@ -1362,9 +1610,10 @@ class AppController:
         if kind == "ready":
             self.install_pending_update()
             return
-        if kind == "downloading":
+        if kind in ("downloading", "verifying", "checking"):
             return
-        threading.Thread(target=self.check_for_updates, daemon=True).start()
+        # Non-blocking: returns immediately, status updates flow via push().
+        self.check_for_updates()
 
     def _tray_show(self, icon=None, item=None):
         if self.window:

@@ -2,6 +2,7 @@ mod sidecar;
 mod updater;
 
 use serde_json::Value;
+use std::io::Write;
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -10,6 +11,21 @@ use tauri::{
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tokio::sync::OnceCell;
+
+fn tauri_log(msg: &str) {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let dir = std::path::PathBuf::from(appdata).join("Tune");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("tauri.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[ts={now} pid={}] {msg}", std::process::id());
+        }
+    }
+}
 
 use sidecar::Sidecar;
 use updater::{Updater, UpdateState};
@@ -185,9 +201,18 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install a panic hook so any unwinding panic ends up in tauri.log
+    // instead of dying silently in --windowed builds.
+    std::panic::set_hook(Box::new(|info| {
+        tauri_log(&format!("PANIC: {info}"));
+    }));
+
+    tauri_log(&format!("boot: tune v{} starting", env!("CARGO_PKG_VERSION")));
+
     let mut builder = tauri::Builder::default();
 
     builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        tauri_log("single-instance: another launch redirected to existing window");
         focus_main(app);
     }));
 
@@ -196,7 +221,7 @@ pub fn run() {
         None,
     ));
 
-    builder
+    let result = builder
         .invoke_handler(tauri::generate_handler![
             rpc,
             set_always_on_top,
@@ -207,29 +232,48 @@ pub fn run() {
             install_update
         ])
         .setup(|app| {
+            tauri_log("setup: enter");
             let handle = app.handle().clone();
+
             // Spawn the Python sidecar.
-            let sc = Sidecar::spawn(&handle).expect("spawn sidecar");
-            let _ = SIDECAR.set(Arc::new(sc));
+            match Sidecar::spawn(&handle) {
+                Ok(sc) => {
+                    tauri_log("setup: sidecar spawned");
+                    let _ = SIDECAR.set(Arc::new(sc));
+                }
+                Err(e) => {
+                    tauri_log(&format!("setup: sidecar spawn FAILED: {e:?}"));
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                }
+            }
 
             // Wire the updater.
             let u = Updater::new(handle.clone());
             let _ = UPDATER.set(Arc::new(u));
+            tauri_log("setup: updater wired");
 
             // Tray.
-            build_tray(&handle)?;
+            if let Err(e) = build_tray(&handle) {
+                tauri_log(&format!("setup: tray build FAILED: {e:?}"));
+                return Err(Box::new(e));
+            }
+            tauri_log("setup: tray built");
 
             // Close button hides instead of exits — Quit is in the tray.
             if let Some(window) = app.get_webview_window("main") {
                 let app_handle = handle.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
+                        tauri_log("window: close requested -> hide");
                         api.prevent_close();
                         if let Some(w) = app_handle.get_webview_window("main") {
                             let _ = w.hide();
                         }
                     }
                 });
+                tauri_log("setup: window event handler attached");
+            } else {
+                tauri_log("setup: WARNING no main window found");
             }
 
             // Initial update check after a short delay so we don't fight with startup.
@@ -240,17 +284,54 @@ pub fn run() {
                 }
             });
 
+            tauri_log("setup: done");
             Ok(())
         })
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|_app_handle, event| {
-            // We live in the tray — explicit `app.exit(0)` from the tray menu
-            // is the only legitimate way to quit. Anything else (last window
-            // closed, OS-level exit signal) gets prevented so the sidecar
-            // stays alive.
-            if let RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+        .build(tauri::generate_context!());
+
+    match result {
+        Ok(app) => {
+            tauri_log("build: app constructed, entering run loop");
+            app.run(|_app_handle, event| {
+                match &event {
+                    RunEvent::ExitRequested { code, .. } => {
+                        tauri_log(&format!("event: ExitRequested code={code:?} (preventing)"));
+                    }
+                    RunEvent::WindowEvent { label, event: we, .. } => {
+                        tauri_log(&format!("event: WindowEvent label={label} event={we:?}"));
+                    }
+                    RunEvent::Exit => tauri_log("event: Exit"),
+                    _ => {}
+                }
+                if let RunEvent::ExitRequested { api, .. } = event {
+                    api.prevent_exit();
+                }
+            });
+        }
+        Err(e) => {
+            tauri_log(&format!("FATAL: build() failed: {e:?}"));
+            // Surface to the user so the silent crash isn't invisible.
+            #[cfg(windows)]
+            {
+                let msg = format!("Tune failed to start:\n\n{e}\n\nSee %APPDATA%\\Tune\\tauri.log");
+                show_error_dialog(&msg);
             }
-        });
+            std::process::exit(1);
+        }
+    }
+
+    tauri_log("run: returned (process exiting)");
+}
+
+#[cfg(windows)]
+fn show_error_dialog(msg: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = std::ffi::OsStr::new(msg).encode_wide().chain(Some(0)).collect();
+    let title: Vec<u16> = std::ffi::OsStr::new("Tune").encode_wide().chain(Some(0)).collect();
+    extern "system" {
+        fn MessageBoxW(hwnd: *mut std::ffi::c_void, text: *const u16, caption: *const u16, utype: u32) -> i32;
+    }
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), wide.as_ptr(), title.as_ptr(), 0x10);
+    }
 }

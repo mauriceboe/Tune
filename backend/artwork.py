@@ -75,9 +75,16 @@ class ArtworkHost:
             boundary = uuid.uuid4().hex
             crlf = b"\r\n"
             body = b""
+            # reqtype
             body += f"--{boundary}".encode() + crlf
             body += b'Content-Disposition: form-data; name="reqtype"' + crlf + crlf
             body += b"fileupload" + crlf
+            # userhash (empty for anonymous upload — catbox now rejects 412
+            # if this field is missing entirely)
+            body += f"--{boundary}".encode() + crlf
+            body += b'Content-Disposition: form-data; name="userhash"' + crlf + crlf
+            body += b"" + crlf
+            # the actual image
             body += f"--{boundary}".encode() + crlf
             body += b'Content-Disposition: form-data; name="fileToUpload"; filename="cover.jpg"' + crlf
             body += b"Content-Type: image/jpeg" + crlf + crlf
@@ -88,7 +95,12 @@ class ArtworkHost:
                 data=body,
                 headers={
                     "Content-Type": f"multipart/form-data; boundary={boundary}",
-                    "User-Agent": f"{APP_NAME}/{APP_VERSION}",
+                    # Catbox started rejecting requests with bot-ish UAs in
+                    # late 2025; use a plain browser-style string.
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                  f"Chrome/126.0.0.0 Safari/537.36 {APP_NAME}/{APP_VERSION}",
+                    "Accept": "*/*",
                 },
             )
             with urllib.request.urlopen(req, timeout=15) as resp:

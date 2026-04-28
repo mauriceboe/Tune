@@ -25,7 +25,7 @@ from pathlib import Path
 
 APP_NAME = "Tune"
 APP_DISPLAY_NAME = "Tune"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 APP_AUMID = "dev.maurice.tune"
 
 DISCORD_CLIENT_ID = os.environ.get("TUNE_DISCORD_CLIENT_ID", "861702238472241162")
@@ -232,6 +232,59 @@ def _run_uninstaller(quiet: bool) -> int:
     return 0
 
 
+def _startup_log(msg: str) -> None:
+    """Append a startup-phase line to %APPDATA%\\Tune\\startup.log. Never raises."""
+    try:
+        path = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME / "startup.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            f.write(f"[{ts}] pid={os.getpid()} {msg}\n")
+    except Exception:
+        pass
+
+
+def _enforce_single_instance() -> None:
+    """Kill any other Tune.exe processes so only one instance ever runs.
+
+    User policy: there should never be two Tunes fighting over the same
+    install dir, WebView2 user-data, Discord RPC slot, or tray icon. The
+    youngest process wins.
+    """
+    if not getattr(sys, "frozen", False):
+        return  # running from source — multiple devs are fine
+    self_pid = os.getpid()
+    self_exe = str(Path(sys.executable).resolve()).lower()
+    try:
+        # /fi "PID ne self" excludes us from the kill list.
+        subprocess.run(
+            ["taskkill", "/f", "/im", f"{APP_NAME}.exe", "/fi", f"PID ne {self_pid}"],
+            capture_output=True,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+            timeout=5,
+        )
+        _startup_log(f"single-instance: taskkilled other {APP_NAME}.exe processes")
+    except Exception as e:
+        _startup_log(f"single-instance: taskkill failed: {e}")
+    # Brief settle so the OS releases file handles before we open WebView2.
+    for _ in range(10):
+        try:
+            out = subprocess.run(
+                ["tasklist", "/fi", f"imagename eq {APP_NAME}.exe", "/fo", "csv", "/nh"],
+                capture_output=True, text=True, timeout=3,
+                creationflags=0x08000000,
+            )
+            count = sum(1 for line in out.stdout.splitlines() if line.strip())
+            if count <= 1:
+                _startup_log(f"single-instance: clear ({count} remaining)")
+                break
+        except Exception:
+            break
+        time.sleep(0.1)
+
+
+_startup_log(f"boot start ({'frozen' if getattr(sys, 'frozen', False) else 'source'}, exe={sys.executable})")
+
 # CLI entry points handled before any GUI initialisation.
 if "--uninstall" in sys.argv[1:]:
     _quiet = "--quiet" in sys.argv[1:] or "/quiet" in sys.argv[1:]
@@ -240,17 +293,25 @@ if "--uninstall" in sys.argv[1:]:
 if _self_install_if_needed():
     sys.exit(0)
 
-# We're now running as the user-facing instance. If a previous update attempt
-# left a Tune.exe.new or _update.bat in the install dir (because the swap
-# raced with another launch, or the user installed manually mid-update), get
-# rid of it before the periodic updater starts staging another one.
+# We're now running as the user-facing instance. Kill any older Tune.exe
+# processes before we touch WebView2 / Discord / the tray, so the swap-script
+# race we just hit can never produce a parallel instance again.
+_enforce_single_instance()
+
+# If a previous update attempt left a Tune.exe.new or _update.bat in the
+# install dir (because the swap raced with another launch, or the user
+# installed manually mid-update), get rid of it before the periodic updater
+# starts staging another one.
 if getattr(sys, "frozen", False) and Path(sys.executable).resolve() == INSTALLED_EXE.resolve():
     for _stale in (INSTALL_DIR / f"{APP_NAME}.exe.new", INSTALL_DIR / "_update.bat"):
         try:
             if _stale.exists():
                 _stale.unlink()
+                _startup_log(f"cleaned stale {_stale.name}")
         except Exception:
             pass
+
+_startup_log("pre-webview init complete")
 
 # Set the AppUserModelID before any window is created so the taskbar groups
 # the application under our own icon instead of the host process icon.
@@ -690,7 +751,9 @@ class PresenceWorker:
         })
 
     def _run(self):
+        _startup_log("worker: thread started")
         rpc = None
+        rpc_next_retry = 0.0  # epoch seconds; 0 means "try now"
         last_key = None
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -700,9 +763,18 @@ class PresenceWorker:
                 with self._lock:
                     discord_on = self._show_on_discord
 
-                if discord_on and rpc is None:
-                    rpc = Presence(DISCORD_CLIENT_ID)
-                    rpc.connect()
+                if discord_on and rpc is None and time.time() >= rpc_next_retry:
+                    try:
+                        rpc = Presence(DISCORD_CLIENT_ID)
+                        rpc.connect()
+                        _startup_log("worker: Discord RPC connected")
+                    except Exception as e:
+                        # Discord isn't running, isn't installed, or refused
+                        # the IPC handshake. Back off for 60 s — the worker
+                        # keeps polling SMTC regardless.
+                        _startup_log(f"worker: Discord RPC connect failed: {e!r}")
+                        rpc = None
+                        rpc_next_retry = time.time() + 60
 
                 session = loop.run_until_complete(self._read_session())
                 with self._session_lock:
@@ -881,6 +953,7 @@ class Updater:
         self._latest: dict | None = None
         self._ready_swap_bat: Path | None = None
         self._state: dict = {"kind": "idle"}
+        self._swap_spawned = False
 
     def is_active(self) -> bool:
         return getattr(sys, "frozen", False) and EXE_PATH == INSTALLED_EXE
@@ -1221,19 +1294,38 @@ class Updater:
         return swap_bat
 
     def trigger_swap_on_exit(self) -> bool:
-        """Spawn the swap script. Caller must immediately exit so the EXE handle is released."""
+        """Spawn the swap script. Idempotent — calling more than once is a no-op.
+
+        Caller must immediately exit so the EXE handle is released and the
+        spawned cmd.exe can move the new binary into place.
+        """
         if not self.has_pending():
             _update_log("trigger_swap: no pending swap_bat")
             return False
-        DETACHED_PROCESS = 0x00000008
+        if self._swap_spawned:
+            _update_log("trigger_swap: already spawned, skipping")
+            return True
+        # CREATE_NO_WINDOW alone keeps the cmd window hidden in --windowed
+        # builds. DETACHED_PROCESS combined with --windowed forces a fresh
+        # console to appear because the parent has none to inherit, which
+        # is exactly the visible-cmd bug we're avoiding.
         CREATE_NO_WINDOW = 0x08000000
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        si = subprocess.STARTUPINFO()
+        si.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
         try:
             subprocess.Popen(
                 ["cmd.exe", "/c", str(self._ready_swap_bat)],
                 cwd=str(INSTALL_DIR),
-                creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+                creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
+                startupinfo=si,
                 close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
+            self._swap_spawned = True
             _update_log(f"trigger_swap: spawned {self._ready_swap_bat}")
             return True
         except Exception as e:
@@ -1680,21 +1772,28 @@ def main():
     )
 
     def on_loaded():
+        _startup_log("webview: window loaded")
         # Window handle is not always available immediately after the JS loaded
         # event fires, so retry a few times across the first few seconds.
         for delay in (0.05, 0.3, 0.8, 1.5, 3.0):
             threading.Timer(delay, app.apply_window_icon).start()
         app.setup_tray()
+        _startup_log("webview: tray set up")
         app.worker.start()
+        _startup_log("webview: worker started")
         app.start_updater()
+        _startup_log("webview: updater scheduled")
         if app.settings.get("start_minimized") and app.window:
             try:
                 app.window.hide()
             except Exception:
                 pass
+        _startup_log("webview: on_loaded complete")
 
     app.window.events.loaded += on_loaded
+    _startup_log("webview: starting event loop")
     webview.start(debug=False)
+    _startup_log("webview: event loop exited")
 
 
 if __name__ == "__main__":

@@ -9,7 +9,17 @@ venv/
 # PyInstaller
 build/
 dist/
+dist-backend/
 *.spec
+
+# Tauri / Cargo
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/gen/
+
+# Node
+node_modules/
+package-lock.json
 
 # IDE
 .vscode/

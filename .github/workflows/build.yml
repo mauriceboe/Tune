@@ -16,66 +16,115 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
-      - name: Verify APP_VERSION matches tag
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
           $expected = $tag -replace '^v',''
-          $match = Select-String -Path app.py -Pattern '^APP_VERSION = "([^"]+)"'
-          if (-not $match) {
-            Write-Error "APP_VERSION not found in app.py"
+          $confJson = Get-Content -Raw -Path src-tauri/tauri.conf.json | ConvertFrom-Json
+          if ($confJson.version -ne $expected) {
+            Write-Error "tauri.conf.json version ($($confJson.version)) does not match tag ($expected)"
             exit 1
           }
-          $current = $match.Matches[0].Groups[1].Value
-          if ($current -ne $expected) {
-            Write-Error "APP_VERSION ($current) does not match tag ($expected). Bump APP_VERSION in app.py before tagging."
+          $cargoToml = Get-Content -Raw -Path src-tauri/Cargo.toml
+          if ($cargoToml -notmatch "version = `"$([regex]::Escape($expected))`"") {
+            Write-Error "src-tauri/Cargo.toml version does not match tag ($expected)"
             exit 1
           }
-          Write-Host "Version OK: $current"
+          $configPy = Get-Content -Raw -Path backend/config.py
+          if ($configPy -notmatch "APP_VERSION = `"$([regex]::Escape($expected))`"") {
+            Write-Error "backend/config.py APP_VERSION does not match tag ($expected)"
+            exit 1
+          }
+          Write-Host "Version OK across the board: $expected"
 
-      - name: Build executable
+      - name: Install Python dependencies
         run: |
-          pyinstaller --onefile --windowed --icon=icon.ico `
-            --name Tune `
-            --collect-all winsdk `
-            --collect-all webview `
-            --collect-all pystray `
-            --collect-all PIL `
-            --add-data "web;web" `
-            --add-data "icon.ico;." `
-            app.py
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
 
-      - name: Generate SHA-256 checksum
+      - name: Build Python sidecar (tune-backend.exe)
+        run: |
+          pyinstaller --onefile --noconsole --name tune-backend `
+            --collect-all winsdk --collect-all PIL `
+            --distpath dist-backend `
+            -p . `
+            backend/__main__.py
+
+      - name: Place sidecar binary for Tauri
         shell: pwsh
         run: |
-          $hash = (Get-FileHash -Algorithm SHA256 dist\Tune.exe).Hash.ToLower()
-          "$hash  Tune.exe" | Out-File -FilePath dist\Tune.exe.sha256 -Encoding ascii -NoNewline
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item dist-backend/tune-backend.exe src-tauri/binaries/tune-backend-x86_64-pc-windows-msvc.exe -Force
+          Get-ChildItem src-tauri/binaries
 
-      - name: Upload artefact
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Build Tauri app (NSIS installer)
+        run: npm run build -- --target x86_64-pc-windows-msvc
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+
+      - name: Locate installer
+        id: locate
+        shell: pwsh
+        run: |
+          $candidates = Get-ChildItem -Recurse -Path src-tauri/target -Filter "*-setup.exe" -ErrorAction SilentlyContinue
+          if (-not $candidates) {
+            Write-Error "No NSIS installer was produced."
+            exit 1
+          }
+          $installer = $candidates[0]
+          Write-Host "Installer: $($installer.FullName)"
+          "installer=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLower()
+          "$hash  $($installer.Name)" | Out-File -FilePath "$($installer.FullName).sha256" -Encoding ascii -NoNewline
+
+      - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
           name: Tune-windows-x64
           path: |
-            dist/Tune.exe
-            dist/Tune.exe.sha256
+            ${{ steps.locate.outputs.installer }}
+            ${{ steps.locate.outputs.installer }}.sha256
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/Tune.exe
-            dist/Tune.exe.sha256
+            ${{ steps.locate.outputs.installer }}
+            ${{ steps.locate.outputs.installer }}.sha256
           generate_release_notes: true

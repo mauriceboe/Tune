@@ -245,9 +245,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
-            // Keep the app alive when all windows are closed (we live in the tray).
-            if let RunEvent::ExitRequested { .. } = event {
-                // do not auto-exit; only exit via tray Quit
+            // We live in the tray — explicit `app.exit(0)` from the tray menu
+            // is the only legitimate way to quit. Anything else (last window
+            // closed, OS-level exit signal) gets prevented so the sidecar
+            // stays alive.
+            if let RunEvent::ExitRequested { api, .. } = event {
+                api.prevent_exit();
             }
         });
 }

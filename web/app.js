@@ -20,9 +20,9 @@ const ui = {
   title: $("title"),
   artist: $("artist"),
   album: $("album"),
-  progressFill: $("progressFill"),
+  waveform: $("waveform"),
   timeNow: $("timeNow"),
-  timeTotal: $("timeTotal"),
+  timeRemain: $("timeRemain"),
   iconPlay: $("iconPlay"),
   statusDot: $("statusDot"),
   statusText: $("statusText"),
@@ -34,7 +34,64 @@ const ui = {
   statTracks: $("statTracks"),
   statTop: $("statTop"),
   appVersion: $("appVersion"),
+  btnShuffle: $("btnShuffle"),
+  btnRepeat: $("btnRepeat"),
+  miniBar: $("miniBar"),
+  miniBarCover: $("miniBarCover"),
+  miniBarTitle: $("miniBarTitle"),
+  miniBarArtist: $("miniBarArtist"),
+  miniBarTime: $("miniBarTime"),
 };
+
+const WAVEFORM_BARS = 56;
+
+function hashSeed(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  let t = seed >>> 0;
+  return function () {
+    t = (t + 0x6D2B79F5) >>> 0;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function buildWaveform(seedKey) {
+  const rng = mulberry32(hashSeed(seedKey || "tune"));
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < WAVEFORM_BARS; i++) {
+    // Cluster heights so the result reads like an audio envelope, not noise.
+    const base = 0.25 + 0.35 * Math.abs(Math.sin((i / WAVEFORM_BARS) * Math.PI * 2.6));
+    const jitter = (rng() - 0.5) * 0.55;
+    const h = Math.max(0.18, Math.min(1, base + jitter));
+    const bar = document.createElement("div");
+    bar.className = "wf-bar";
+    bar.style.setProperty("--h", `${(h * 100).toFixed(1)}%`);
+    frag.appendChild(bar);
+  }
+  ui.waveform.innerHTML = "";
+  ui.waveform.appendChild(frag);
+}
+
+function paintWaveform(ratio) {
+  const bars = ui.waveform.children;
+  const n = bars.length;
+  if (!n) return;
+  const headIdx = Math.min(n - 1, Math.max(0, Math.floor(ratio * n)));
+  for (let i = 0; i < n; i++) {
+    const b = bars[i];
+    b.classList.toggle("played", i < headIdx);
+    b.classList.toggle("head", i === headIdx);
+  }
+}
 
 function fmtTime(s) {
   s = Math.max(0, Math.floor(s || 0));
@@ -91,10 +148,16 @@ function renderTrack(track) {
     ui.cover.classList.remove("has-art");
     ui.cover.style.backgroundImage = "";
     ui.backdrop.style.backgroundImage = "";
-    ui.progressFill.style.width = "0%";
+    paintWaveform(0);
     ui.timeNow.textContent = "0:00";
-    ui.timeTotal.textContent = "0:00";
+    ui.timeRemain.textContent = "-0:00";
+    ui.miniBarTitle.textContent = "Not playing";
+    ui.miniBarArtist.textContent = "—";
+    ui.miniBarTime.textContent = "0:00";
+    ui.miniBarCover.style.backgroundImage = "";
     setIcon(false);
+    setShuffleState(false);
+    setRepeatState("none");
     return;
   }
 
@@ -112,6 +175,9 @@ function renderTrack(track) {
     ui.artist.classList.remove("title-fade");
     void ui.artist.offsetWidth;
     ui.artist.classList.add("title-fade");
+    ui.miniBarTitle.textContent = track.title || "—";
+    ui.miniBarArtist.textContent = track.artist || "";
+    buildWaveform(newKey);
   }
 
   if (track.cover_data_url) {
@@ -119,6 +185,7 @@ function renderTrack(track) {
       ui.cover.dataset.coverSig = track.cover_data_url;
       ui.cover.style.backgroundImage = `url("${track.cover_data_url}")`;
       ui.backdrop.style.backgroundImage = `url("${track.cover_data_url}")`;
+      ui.miniBarCover.style.backgroundImage = `url("${track.cover_data_url}")`;
       ui.cover.classList.add("has-art");
       ui.cover.classList.remove("swap");
       void ui.cover.offsetWidth;
@@ -128,21 +195,37 @@ function renderTrack(track) {
     ui.cover.classList.remove("has-art");
     ui.cover.style.backgroundImage = "";
     ui.backdrop.style.backgroundImage = "";
+    ui.miniBarCover.style.backgroundImage = "";
     ui.cover.dataset.coverSig = "";
   }
 
   if (track.accent) applyAccent(track.accent);
   setIcon(track.playing);
+  setShuffleState(!!track.shuffle);
+  setRepeatState(track.repeat || "none");
+}
+
+function setShuffleState(active) {
+  ui.btnShuffle.classList.toggle("active", !!active);
+}
+
+function setRepeatState(mode) {
+  ui.btnRepeat.classList.remove("active", "repeat-track");
+  if (mode === "list") ui.btnRepeat.classList.add("active");
+  if (mode === "track") ui.btnRepeat.classList.add("active", "repeat-track");
 }
 
 function tickProgress() {
   const t = state.track;
-  if (t && t.playing && t.duration) {
-    const elapsed = Math.min(t.duration, Math.max(0, Math.floor(Date.now() / 1000) - t.start));
-    const ratio = elapsed / t.duration;
-    ui.progressFill.style.width = `${Math.min(100, ratio * 100).toFixed(2)}%`;
+  if (t && t.duration) {
+    const elapsed = t.playing
+      ? Math.min(t.duration, Math.max(0, Math.floor(Date.now() / 1000) - t.start))
+      : Math.min(t.duration, Math.max(0, t.position || 0));
+    const ratio = t.duration ? elapsed / t.duration : 0;
+    paintWaveform(ratio);
     ui.timeNow.textContent = fmtTime(elapsed);
-    ui.timeTotal.textContent = fmtTime(t.duration);
+    ui.timeRemain.textContent = `-${fmtTime(Math.max(0, t.duration - elapsed))}`;
+    ui.miniBarTime.textContent = fmtTime(elapsed);
     if (state.tab === "lyrics") highlightLyric(elapsed);
   }
 }
@@ -276,9 +359,70 @@ function call(method, ...args) {
 $("btnPlay").addEventListener("click", () => call("media_action", "toggle"));
 $("btnPrev").addEventListener("click", () => call("media_action", "prev"));
 $("btnNext").addEventListener("click", () => call("media_action", "next"));
+$("btnShuffle").addEventListener("click", () => call("media_action", "shuffle_toggle"));
+$("btnRepeat").addEventListener("click", () => call("media_action", "repeat_cycle"));
 $("btnMini").addEventListener("click", () => call("toggle_mini"));
 $("btnMin").addEventListener("click", () => call("minimize"));
 $("btnClose").addEventListener("click", () => call("close_window"));
+
+// ---- Cover parallax (subtle 3D tilt + glare on hover) ----
+(function () {
+  const cover = ui.cover;
+  if (!cover) return;
+  // Add a glare overlay once.
+  const glare = document.createElement("div");
+  glare.className = "cover-glare";
+  cover.appendChild(glare);
+
+  const MAX_TILT = 9;          // degrees
+  const MAX_LIFT = 14;          // px translateZ
+  let raf = null;
+  let pending = null;
+
+  function apply() {
+    raf = null;
+    if (!pending) return;
+    const { rx, ry, gx, gy } = pending;
+    cover.style.transform = `perspective(900px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg) translateZ(${MAX_LIFT}px)`;
+    cover.style.setProperty("--glare-x", `${gx}%`);
+    cover.style.setProperty("--glare-y", `${gy}%`);
+  }
+
+  cover.addEventListener("mousemove", (e) => {
+    const rect = cover.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width;
+    const py = (e.clientY - rect.top) / rect.height;
+    pending = {
+      rx: (0.5 - py) * 2 * MAX_TILT,
+      ry: (px - 0.5) * 2 * MAX_TILT,
+      gx: px * 100,
+      gy: py * 100,
+    };
+    cover.classList.add("tilting");
+    if (!raf) raf = requestAnimationFrame(apply);
+  });
+
+  function reset() {
+    pending = null;
+    if (raf) { cancelAnimationFrame(raf); raf = null; }
+    cover.classList.remove("tilting");
+    cover.style.transform = "";
+  }
+  cover.addEventListener("mouseleave", reset);
+  cover.addEventListener("blur", reset);
+})();
+
+// ---- Waveform click-to-seek (best effort; SMTC doesn't accept seek for all apps) ----
+ui.waveform.addEventListener("click", (e) => {
+  const t = state.track;
+  if (!t || !t.duration) return;
+  const rect = ui.waveform.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  const targetSeconds = Math.floor(t.duration * ratio);
+  call("media_action_seek", targetSeconds);
+});
+
+buildWaveform("tune");
 
 $("setDiscord").addEventListener("change", (e) => call("save_setting", "show_on_discord", e.target.checked));
 $("setTray").addEventListener("change", (e) => call("save_setting", "minimize_to_tray", e.target.checked));

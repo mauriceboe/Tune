@@ -43,16 +43,19 @@
       </div>
 
       <div class="progress-wrap">
-        <div class="progress-bar">
-          <div class="progress-fill" id="progressFill"></div>
-        </div>
+        <div class="waveform" id="waveform" aria-hidden="true"></div>
         <div class="progress-times">
           <span id="timeNow">0:00</span>
-          <span id="timeTotal">0:00</span>
+          <span id="timeRemain">-0:00</span>
         </div>
       </div>
 
       <div class="controls">
+        <button class="ctrl-side" id="btnShuffle" aria-label="Shuffle" title="Shuffle">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 3h5v5"/><path d="M4 20l16.5-16.5"/><path d="M21 16v5h-5"/><path d="M15 15l5.5 5.5"/><path d="M4 4l5 5"/>
+          </svg>
+        </button>
         <button class="ctrl glass-btn" id="btnPrev" aria-label="Previous">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6L20 5v14z"/></svg>
         </button>
@@ -61,6 +64,11 @@
         </button>
         <button class="ctrl glass-btn" id="btnNext" aria-label="Next">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 6h2v12h-2zM4 5l10.5 7L4 19z"/></svg>
+        </button>
+        <button class="ctrl-side" id="btnRepeat" aria-label="Repeat" title="Repeat">
+          <svg id="iconRepeat" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+          </svg>
         </button>
       </div>
     </section>
@@ -152,6 +160,15 @@
       </div>
     </section>
   </main>
+
+  <div class="mini-bar" id="miniBar" aria-hidden="true">
+    <div class="mini-bar-cover" id="miniBarCover"></div>
+    <div class="mini-bar-meta">
+      <div class="mini-bar-title" id="miniBarTitle">Not playing</div>
+      <div class="mini-bar-artist" id="miniBarArtist">—</div>
+    </div>
+    <div class="mini-bar-time" id="miniBarTime">0:00</div>
+  </div>
 
   <div class="resize-edge resize-r" data-resize="r"></div>
   <div class="resize-edge resize-b" data-resize="b"></div>

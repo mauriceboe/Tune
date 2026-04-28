@@ -25,7 +25,7 @@ from pathlib import Path
 
 APP_NAME = "Tune"
 APP_DISPLAY_NAME = "Tune"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 APP_AUMID = "dev.maurice.tune"
 
 DISCORD_CLIENT_ID = os.environ.get("TUNE_DISCORD_CLIENT_ID", "861702238472241162")
@@ -41,6 +41,9 @@ START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home())))
     / "Microsoft" / "Windows" / "Start Menu" / "Programs" / f"{APP_DISPLAY_NAME}.lnk"
 )
+PUBLISHER = "Maurice Boe"
+HOMEPAGE_URL = "https://github.com/mauriceboe/Tune"
+UNINSTALL_REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Tune"
 
 
 def _create_shortcut(target: Path, link_path: Path) -> None:
@@ -59,21 +62,80 @@ def _create_shortcut(target: Path, link_path: Path) -> None:
     )
 
 
+def _register_uninstall_entry(target_exe: Path) -> None:
+    """Register Tune in 'Apps & features' / 'Programs and Features' (per-user)."""
+    try:
+        size_kb = max(1, target_exe.stat().st_size // 1024)
+    except Exception:
+        size_kb = 1
+    install_date = datetime.now().strftime("%Y%m%d")
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, UNINSTALL_REGISTRY_KEY) as key:
+            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, APP_DISPLAY_NAME)
+            winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, APP_VERSION)
+            winreg.SetValueEx(key, "DisplayIcon", 0, winreg.REG_SZ, str(target_exe))
+            winreg.SetValueEx(key, "Publisher", 0, winreg.REG_SZ, PUBLISHER)
+            winreg.SetValueEx(key, "URLInfoAbout", 0, winreg.REG_SZ, HOMEPAGE_URL)
+            winreg.SetValueEx(key, "HelpLink", 0, winreg.REG_SZ, HOMEPAGE_URL)
+            winreg.SetValueEx(key, "InstallLocation", 0, winreg.REG_SZ, str(INSTALL_DIR))
+            winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, f'"{target_exe}" --uninstall')
+            winreg.SetValueEx(key, "QuietUninstallString", 0, winreg.REG_SZ, f'"{target_exe}" --uninstall --quiet')
+            winreg.SetValueEx(key, "InstallDate", 0, winreg.REG_SZ, install_date)
+            winreg.SetValueEx(key, "EstimatedSize", 0, winreg.REG_DWORD, int(size_kb))
+            winreg.SetValueEx(key, "NoModify", 0, winreg.REG_DWORD, 1)
+            winreg.SetValueEx(key, "NoRepair", 0, winreg.REG_DWORD, 1)
+    except Exception:
+        pass
+
+
+def _unregister_uninstall_entry() -> None:
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_REGISTRY_KEY)
+    except Exception:
+        pass
+
+
+def _confirm_install() -> bool:
+    """Modal confirmation before copying ourselves into the user profile."""
+    MB_YESNO = 0x04
+    MB_ICONQUESTION = 0x20
+    IDYES = 6
+    text = (
+        f"Install {APP_DISPLAY_NAME} {APP_VERSION}?\n\n"
+        f"It will be copied to:\n  {INSTALL_DIR}\n\n"
+        "A Start Menu shortcut will be created and the app will appear under "
+        "Settings -> Apps -> Installed apps for easy uninstall.\n\n"
+        "No admin rights are required. Continue?"
+    )
+    result = ctypes.windll.user32.MessageBoxW(
+        0, text, f"Install {APP_DISPLAY_NAME}", MB_YESNO | MB_ICONQUESTION
+    )
+    return result == IDYES
+
+
 def _self_install_if_needed() -> bool:
-    """Copy this exe into %LOCALAPPDATA%\\Programs and create a Start Menu shortcut on first run."""
+    """Copy this exe into %LOCALAPPDATA%\\Programs, create shortcut + uninstall entry."""
     if not getattr(sys, "frozen", False):
         return False
     current = Path(sys.executable).resolve()
     target = INSTALLED_EXE.resolve()
     if current == target:
+        # Already running from the install location: refresh registry entry so
+        # the version stays in sync after an auto-update.
+        _register_uninstall_entry(target)
+        return False
+    if not _confirm_install():
         return False
     try:
         INSTALL_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(current, target)
         _create_shortcut(target, START_MENU)
+        _register_uninstall_entry(target)
         ctypes.windll.user32.MessageBoxW(
             0,
-            f"{APP_DISPLAY_NAME} has been installed.\n\nYou can find it in your Start Menu.",
+            f"{APP_DISPLAY_NAME} has been installed.\n\n"
+            f"Find it in the Start Menu, or under\n"
+            f"Settings -> Apps -> Installed apps to uninstall.",
             APP_DISPLAY_NAME,
             0x40,
         )
@@ -83,6 +145,97 @@ def _self_install_if_needed() -> bool:
         ctypes.windll.user32.MessageBoxW(0, f"Install failed: {e}", APP_DISPLAY_NAME, 0x10)
         return False
 
+
+def _run_uninstaller(quiet: bool) -> int:
+    """Handle `--uninstall` invocation. Confirms, then schedules removal and exits."""
+    if not getattr(sys, "frozen", False):
+        ctypes.windll.user32.MessageBoxW(
+            0, "Uninstall is only available for the installed build.", APP_DISPLAY_NAME, 0x30
+        )
+        return 1
+
+    if not quiet:
+        MB_YESNO = 0x04
+        MB_ICONWARNING = 0x30
+        IDYES = 6
+        text = (
+            f"Uninstall {APP_DISPLAY_NAME}?\n\n"
+            "This removes the application, the Start Menu shortcut, and the "
+            "Windows autostart entry.\n\n"
+            "Your settings, history, and artwork cache in\n"
+            f"  {SETTINGS_DIR}\nwill be left in place.\n\n"
+            "Continue?"
+        )
+        if ctypes.windll.user32.MessageBoxW(0, text, f"Uninstall {APP_DISPLAY_NAME}", MB_YESNO | MB_ICONWARNING) != IDYES:
+            return 0
+
+    # Best-effort cleanup we can do from the running process before handing
+    # the rest to a self-deleting batch script.
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            try:
+                winreg.DeleteValue(key, AUTOSTART_NAME)
+            except FileNotFoundError:
+                pass
+    except Exception:
+        pass
+
+    _unregister_uninstall_entry()
+
+    try:
+        if START_MENU.exists():
+            START_MENU.unlink()
+    except Exception:
+        pass
+
+    # The batch script removes the still-locked EXE and the install folder
+    # once this process has exited.
+    bat = INSTALL_DIR / "_uninstall.bat"
+    try:
+        INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+        bat.write_text(
+            "@echo off\r\n"
+            "setlocal\r\n"
+            "set TRIES=0\r\n"
+            ":wait\r\n"
+            f'tasklist /fi "imagename eq {APP_NAME}.exe" 2>nul | find /i "{APP_NAME}.exe" >nul\r\n'
+            "if errorlevel 1 goto remove\r\n"
+            "set /a TRIES+=1\r\n"
+            "if %TRIES% GEQ 60 goto remove\r\n"
+            "timeout /t 1 /nobreak >nul\r\n"
+            "goto wait\r\n"
+            ":remove\r\n"
+            f'del /f /q "{INSTALLED_EXE}" 2>nul\r\n'
+            f'rmdir /s /q "{INSTALL_DIR}" 2>nul\r\n',
+            encoding="ascii",
+        )
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NO_WINDOW = 0x08000000
+        subprocess.Popen(
+            ["cmd.exe", "/c", str(bat)],
+            cwd=str(Path(os.environ.get("TEMP", str(Path.home())))),
+            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+            close_fds=True,
+        )
+    except Exception:
+        pass
+
+    if not quiet:
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            f"{APP_DISPLAY_NAME} has been uninstalled.\n\n"
+            f"User data was left in {SETTINGS_DIR}\n"
+            "and can be deleted manually if no longer needed.",
+            APP_DISPLAY_NAME,
+            0x40,
+        )
+    return 0
+
+
+# CLI entry points handled before any GUI initialisation.
+if "--uninstall" in sys.argv[1:]:
+    _quiet = "--quiet" in sys.argv[1:] or "/quiet" in sys.argv[1:]
+    sys.exit(_run_uninstaller(_quiet))
 
 if _self_install_if_needed():
     sys.exit(0)
@@ -139,7 +292,7 @@ atexit.register(lambda: shutil.rmtree(_WV2_DATA, ignore_errors=True))
 import pystray
 import webview
 from PIL import Image, ImageDraw
-from pypresence import ActivityType, Presence
+from pypresence import ActivityType, Presence, StatusDisplayType
 from winsdk.windows.media.control import (
     GlobalSystemMediaTransportControlsSessionManager as MediaManager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
@@ -163,7 +316,13 @@ DEFAULT_SETTINGS = {
     "minimize_to_tray": True,
     "start_minimized": False,
     "always_on_top": False,
+    "auto_check_updates": True,
 }
+
+GITHUB_REPO = "mauriceboe/Tune"
+GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+UPDATE_CHECK_INTERVAL_SECONDS = 6 * 3600
+UPDATE_USER_AGENT = f"Tune/{APP_VERSION} (+https://github.com/{GITHUB_REPO})"
 
 
 def load_json(path: Path, default):
@@ -539,6 +698,7 @@ class PresenceWorker:
                 if discord_on and rpc and key != last_key:
                     q = urllib.parse.quote(f"{track['artist']} {track['title']}")
                     payload = {
+                        "name": "Apple Music",
                         "details": (track["title"] or "Unknown")[:128],
                         "state": (track["artist"] or "Unknown")[:128],
                         "large_image": discord_artwork or "apple_music",
@@ -547,6 +707,7 @@ class PresenceWorker:
                         "small_text": "Apple Music",
                         "start": track["start"],
                         "activity_type": ActivityType.LISTENING,
+                        "status_display_type": StatusDisplayType.DETAILS,
                         "buttons": [
                             {"label": "Search on YouTube", "url": f"https://music.youtube.com/search?q={q}"},
                             {"label": "Search on Spotify", "url": f"https://open.spotify.com/search/{q}"},
@@ -557,12 +718,17 @@ class PresenceWorker:
                     try:
                         rpc.update(**payload)
                     except Exception:
-                        payload.pop("activity_type", None)
+                        payload.pop("status_display_type", None)
                         try:
                             rpc.update(**payload)
                         except Exception:
-                            payload.pop("buttons", None)
-                            rpc.update(**payload)
+                            payload.pop("activity_type", None)
+                            payload.pop("name", None)
+                            try:
+                                rpc.update(**payload)
+                            except Exception:
+                                payload.pop("buttons", None)
+                                rpc.update(**payload)
                     last_key = key
 
                 if not discord_on and rpc:
@@ -615,6 +781,221 @@ class PresenceWorker:
         self._wake.clear()
 
 
+def _parse_version(s: str) -> tuple:
+    s = (s or "").lstrip("vV").split("-")[0].split("+")[0]
+    parts = []
+    for p in s.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts) if parts else (0,)
+
+
+class Updater:
+    """Checks GitHub Releases for newer versions and swaps the EXE on quit.
+
+    Only active when running as a frozen, self-installed EXE. Running from
+    source (python app.py) or from any path other than INSTALLED_EXE is a
+    no-op so contributors don't get update prompts during development.
+    """
+
+    def __init__(self, on_status):
+        self.on_status = on_status
+        self._lock = threading.Lock()
+        self._busy = False
+        self._latest: dict | None = None
+        self._ready_swap_bat: Path | None = None
+
+    def is_active(self) -> bool:
+        return getattr(sys, "frozen", False) and EXE_PATH == INSTALLED_EXE
+
+    def has_pending(self) -> bool:
+        return self._ready_swap_bat is not None and self._ready_swap_bat.exists()
+
+    def latest(self) -> dict | None:
+        return self._latest
+
+    def start_periodic(self):
+        if not self.is_active():
+            return
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        # Initial delay so update I/O doesn't fight with startup.
+        time.sleep(20)
+        while True:
+            try:
+                self.check(silent=True, auto_download=True)
+            except Exception:
+                pass
+            time.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
+
+    def check(self, silent: bool = True, auto_download: bool = False) -> dict:
+        with self._lock:
+            if self._busy:
+                return {"ok": False, "error": "busy"}
+            self._busy = True
+        try:
+            info = self._fetch_latest()
+            if not info.get("ok"):
+                if not silent:
+                    self.on_status({"kind": "error", "error": info.get("error", "fetch failed")})
+                return info
+            if not info.get("available"):
+                if not silent:
+                    self.on_status({"kind": "up_to_date", "current": APP_VERSION})
+                return info
+            self._latest = {k: v for k, v in info.items() if k != "ok"}
+            self.on_status({"kind": "available", **self._latest})
+            if auto_download:
+                self.download_and_apply()
+            return info
+        finally:
+            with self._lock:
+                self._busy = False
+
+    def _fetch_latest(self) -> dict:
+        try:
+            req = urllib.request.Request(
+                GITHUB_API_LATEST,
+                headers={
+                    "User-Agent": UPDATE_USER_AGENT,
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+        if data.get("draft") or data.get("prerelease"):
+            return {"ok": True, "available": False, "reason": "prerelease"}
+
+        tag = data.get("tag_name") or ""
+        latest = _parse_version(tag)
+        current = _parse_version(APP_VERSION)
+        if latest <= current:
+            return {"ok": True, "available": False, "tag": tag}
+
+        assets = data.get("assets", []) or []
+        exe_asset = next(
+            (a for a in assets if (a.get("name") or "").lower().endswith(".exe")),
+            None,
+        )
+        if not exe_asset:
+            return {"ok": False, "error": "no exe asset in release"}
+        sha_asset = next(
+            (a for a in assets if (a.get("name") or "").lower().endswith(".sha256")),
+            None,
+        )
+        return {
+            "ok": True,
+            "available": True,
+            "tag": tag,
+            "version": ".".join(str(x) for x in latest),
+            "url": exe_asset.get("browser_download_url"),
+            "size": int(exe_asset.get("size") or 0),
+            "sha256_url": sha_asset.get("browser_download_url") if sha_asset else None,
+            "notes": data.get("body") or "",
+            "html_url": data.get("html_url") or "",
+        }
+
+    def download_and_apply(self) -> dict:
+        if not self._latest:
+            return {"ok": False, "error": "no update info"}
+        if not self.is_active():
+            return {"ok": False, "error": "not installed"}
+
+        new_path = INSTALL_DIR / f"{APP_NAME}.exe.new"
+        try:
+            self.on_status({"kind": "downloading", **self._latest})
+
+            req = urllib.request.Request(
+                self._latest["url"],
+                headers={"User-Agent": UPDATE_USER_AGENT},
+            )
+            INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+            with urllib.request.urlopen(req, timeout=120) as resp, open(new_path, "wb") as f:
+                shutil.copyfileobj(resp, f, length=1024 * 256)
+
+            sha_url = self._latest.get("sha256_url")
+            if sha_url:
+                req = urllib.request.Request(sha_url, headers={"User-Agent": UPDATE_USER_AGENT})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    sha_text = resp.read().decode("utf-8", errors="replace").strip()
+                expected = sha_text.split()[0].lower() if sha_text else ""
+                if expected:
+                    h = hashlib.sha256()
+                    with open(new_path, "rb") as f:
+                        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                            h.update(chunk)
+                    actual = h.hexdigest().lower()
+                    if expected != actual:
+                        try:
+                            new_path.unlink()
+                        except Exception:
+                            pass
+                        self.on_status({"kind": "error", "error": "checksum mismatch"})
+                        return {"ok": False, "error": "checksum mismatch"}
+
+            swap_bat = self._write_swap_script(new_path, INSTALLED_EXE)
+            self._ready_swap_bat = swap_bat
+            self.on_status({"kind": "ready", **self._latest})
+            return {"ok": True, "swap_bat": str(swap_bat)}
+        except Exception as e:
+            try:
+                new_path.unlink()
+            except Exception:
+                pass
+            self.on_status({"kind": "error", "error": str(e)})
+            return {"ok": False, "error": str(e)}
+
+    @staticmethod
+    def _write_swap_script(new_exe: Path, target_exe: Path) -> Path:
+        swap_bat = INSTALL_DIR / "_update.bat"
+        # Wait for the current process to release the EXE, swap, relaunch, self-delete.
+        content = (
+            "@echo off\r\n"
+            "setlocal\r\n"
+            "set TRIES=0\r\n"
+            ":wait\r\n"
+            f'tasklist /fi "imagename eq {APP_NAME}.exe" 2>nul | find /i "{APP_NAME}.exe" >nul\r\n'
+            "if errorlevel 1 goto swap\r\n"
+            "set /a TRIES+=1\r\n"
+            "if %TRIES% GEQ 60 goto swap\r\n"
+            "timeout /t 1 /nobreak >nul\r\n"
+            "goto wait\r\n"
+            ":swap\r\n"
+            f'move /y "{new_exe}" "{target_exe}" >nul\r\n'
+            "if errorlevel 1 (\r\n"
+            "  timeout /t 2 /nobreak >nul\r\n"
+            f'  move /y "{new_exe}" "{target_exe}" >nul\r\n'
+            ")\r\n"
+            f'start "" "{target_exe}"\r\n'
+            '(goto) 2>nul & del "%~f0"\r\n'
+        )
+        swap_bat.write_text(content, encoding="ascii")
+        return swap_bat
+
+    def trigger_swap_on_exit(self) -> bool:
+        """Spawn the swap script. Caller must immediately exit so the EXE handle is released."""
+        if not self.has_pending():
+            return False
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NO_WINDOW = 0x08000000
+        try:
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(self._ready_swap_bat)],
+                cwd=str(INSTALL_DIR),
+                creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+                close_fds=True,
+            )
+            return True
+        except Exception:
+            return False
+
+
 def make_tray_icon_image() -> Image.Image:
     logo_path = WEB_DIR / "logo-64.png"
     if logo_path.exists():
@@ -638,7 +1019,16 @@ class Api:
             **self.app.settings,
             "autostart": autostart_enabled(),
             "version": APP_VERSION,
+            "update": self.app._update_state,
+            "updater_active": self.app.updater.is_active(),
+            "homepage_url": HOMEPAGE_URL,
         }
+
+    def check_for_updates(self):
+        return self.app.check_for_updates()
+
+    def install_update(self):
+        return self.app.install_pending_update()
 
     def media_action(self, action):
         self.app.media_action(action)
@@ -693,6 +1083,28 @@ class AppController:
         self._tray_icon = None
         self.worker = PresenceWorker(self._on_worker_update, self.history, self.artwork_host)
         self.worker.set_discord_enabled(self.settings["show_on_discord"])
+        self.updater = Updater(self._on_updater_status)
+        self._update_state: dict = {"kind": "idle"}
+
+    def _on_updater_status(self, status: dict):
+        self._update_state = status
+        self.push({"update": status})
+
+    def start_updater(self):
+        if self.settings.get("auto_check_updates", True):
+            self.updater.start_periodic()
+
+    def check_for_updates(self) -> dict:
+        return self.updater.check(silent=False, auto_download=True)
+
+    def install_pending_update(self) -> bool:
+        if not self.updater.has_pending():
+            return False
+        if not self.updater.trigger_swap_on_exit():
+            return False
+        # Give the swap script a moment to start before we release the EXE handle.
+        threading.Timer(0.2, self.quit_app).start()
+        return True
 
     def push(self, payload: dict):
         if not self.window:
@@ -840,7 +1252,7 @@ class AppController:
 
     def setup_tray(self):
         image = make_tray_icon_image()
-        menu = pystray.Menu(
+        menu_items = [
             pystray.MenuItem("Show", self._tray_show, default=True),
             pystray.MenuItem("Hide", self._tray_hide),
             pystray.Menu.SEPARATOR,
@@ -848,10 +1260,38 @@ class AppController:
             pystray.MenuItem("Next", lambda: self.media_action("next")),
             pystray.MenuItem("Previous", lambda: self.media_action("prev")),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quit", self._tray_quit),
-        )
-        self._tray_icon = pystray.Icon(APP_NAME, image, APP_DISPLAY_NAME, menu)
+        ]
+        if self.updater.is_active():
+            menu_items.extend([
+                pystray.MenuItem(
+                    lambda item: self._tray_update_label(),
+                    self._tray_update_action,
+                ),
+                pystray.Menu.SEPARATOR,
+            ])
+        menu_items.append(pystray.MenuItem("Quit", self._tray_quit))
+        self._tray_icon = pystray.Icon(APP_NAME, image, APP_DISPLAY_NAME, pystray.Menu(*menu_items))
         threading.Thread(target=self._tray_icon.run, daemon=True).start()
+
+    def _tray_update_label(self) -> str:
+        kind = (self._update_state or {}).get("kind", "idle")
+        if kind == "ready":
+            v = self._update_state.get("version") or self._update_state.get("tag", "")
+            return f"Restart to install update {v}".strip()
+        if kind == "downloading":
+            return "Downloading update..."
+        if kind == "available":
+            return "Update available - download"
+        return "Check for updates"
+
+    def _tray_update_action(self, icon=None, item=None):
+        kind = (self._update_state or {}).get("kind", "idle")
+        if kind == "ready":
+            self.install_pending_update()
+            return
+        if kind == "downloading":
+            return
+        threading.Thread(target=self.check_for_updates, daemon=True).start()
 
     def _tray_show(self, icon=None, item=None):
         if self.window:
@@ -872,6 +1312,13 @@ class AppController:
         self.quit_app()
 
     def quit_app(self):
+        # If an update has been downloaded and verified, kick off the swap
+        # script before we tear down so the new binary starts after exit.
+        try:
+            if self.updater.has_pending():
+                self.updater.trigger_swap_on_exit()
+        except Exception:
+            pass
         try:
             self.worker.stop()
         except Exception:
@@ -915,6 +1362,7 @@ def main():
             threading.Timer(delay, app.apply_window_icon).start()
         app.setup_tray()
         app.worker.start()
+        app.start_updater()
         if app.settings.get("start_minimized") and app.window:
             try:
                 app.window.hide()

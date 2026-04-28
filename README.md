@@ -87,8 +87,9 @@ Discord Rich Presence for Apple Music on Windows — with synced lyrics, listeni
 
 #### Quality of life
 
-- **Self-installing** — first launch copies into `%LOCALAPPDATA%\Programs\Tune\` and creates a Start Menu shortcut
-- **System tray** — with play/pause, next, previous and quick show/hide
+- **One-click install** — first launch asks for confirmation, copies into `%LOCALAPPDATA%\Programs\Tune\`, creates a Start Menu shortcut, and registers under *Settings → Apps → Installed apps* so you can uninstall the regular Windows way
+- **Auto-updates** — checks GitHub Releases in the background, downloads new builds, verifies the SHA-256, and swaps the EXE on next quit
+- **System tray** — with play/pause, next, previous, an update item, and quick show/hide
 - **Autostart** — optional Windows-startup launch
 - **Always on top** — keep the player above other windows
 - **Frameless + resizable** — drag any edge to resize
@@ -102,10 +103,14 @@ Discord Rich Presence for Apple Music on Windows — with synced lyrics, listeni
 ## Get started in 30 seconds
 
 1. **Download** the latest `Tune.exe` from [Releases](https://github.com/mauriceboe/Tune/releases/latest)
-2. **Double-click** — Tune installs itself into your user profile and pins a Start Menu entry
+2. **Double-click** — Tune asks once whether to install, then copies itself into your user profile, pins a Start Menu entry, and registers under *Settings → Apps → Installed apps*
 3. **Open Apple Music**, hit play, and watch your Discord status update
 
-> No admin rights required. No Microsoft Store, no installer wizard.
+> No admin rights required. No Microsoft Store. From the next launch onward, Tune updates itself in the background — new releases on GitHub get downloaded, SHA-256 verified, and applied the next time you quit the app.
+
+## Uninstall
+
+Open *Settings → Apps → Installed apps* (or *Programs and Features* on Windows 10), pick **Tune**, and click *Uninstall*. Your settings, history and artwork cache in `%APPDATA%\Tune\` are kept; delete that folder by hand if you want them gone too.
 
 <br />
 
@@ -119,6 +124,8 @@ Tune doesn't talk to Apple Music directly — it reads the **Windows System Medi
 Cover art is hashed and uploaded once to [catbox.moe](https://catbox.moe) so Discord can show the exact image. Each unique cover uploads only one time — subsequent plays of the same album hit the local cache.
 
 Synced lyrics come from [LRCLIB](https://lrclib.net), a free community lyrics database — no API key, no account.
+
+Auto-updates poll `api.github.com/repos/mauriceboe/Tune/releases/latest` every six hours. When a newer non-prerelease tag is found, Tune downloads `Tune.exe` and `Tune.exe.sha256` from that release, verifies the checksum, stages the new binary as `Tune.exe.new`, and writes a small batch script that swaps the files and relaunches once you quit. The check can be disabled in settings, and it never runs when you're developing from source.
 
 <br />
 
@@ -146,6 +153,8 @@ Tune runs locally and stores everything in `%APPDATA%\Tune\`:
 - `settings.json` — your preferences
 - `history.json` — your play history (never sent anywhere)
 - `artwork_cache.json` — a `sha256 → catbox.moe url` map
+
+The auto-updater fetches release metadata from GitHub (`api.github.com`) and downloads new builds from `github.com/mauriceboe/Tune/releases`. No identifiers other than a `User-Agent` of `Tune/<version>` are sent.
 
 Data leaves your machine in only three cases, all triggered by playback:
 

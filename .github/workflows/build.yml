@@ -19,12 +19,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+
+      - name: Verify APP_VERSION matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $expected = $tag -replace '^v',''
+          $match = Select-String -Path app.py -Pattern '^APP_VERSION = "([^"]+)"'
+          if (-not $match) {
+            Write-Error "APP_VERSION not found in app.py"
+            exit 1
+          }
+          $current = $match.Matches[0].Groups[1].Value
+          if ($current -ne $expected) {
+            Write-Error "APP_VERSION ($current) does not match tag ($expected). Bump APP_VERSION in app.py before tagging."
+            exit 1
+          }
+          Write-Host "Version OK: $current"
 
       - name: Build executable
         run: |
@@ -38,15 +57,25 @@ jobs:
             --add-data "icon.ico;." `
             app.py
 
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 dist\Tune.exe).Hash.ToLower()
+          "$hash  Tune.exe" | Out-File -FilePath dist\Tune.exe.sha256 -Encoding ascii -NoNewline
+
       - name: Upload artefact
         uses: actions/upload-artifact@v4
         with:
           name: Tune-windows-x64
-          path: dist/Tune.exe
+          path: |
+            dist/Tune.exe
+            dist/Tune.exe.sha256
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Tune.exe
+          files: |
+            dist/Tune.exe
+            dist/Tune.exe.sha256
           generate_release_notes: true

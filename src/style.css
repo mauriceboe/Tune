@@ -216,53 +216,70 @@ button { font-family: inherit; }
 .artist { font-size: 14px; color: var(--text-muted); }
 .album { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
 
-/* ---- Progress (waveform) ---- */
+/* ---- Progress (modern playbar) ---- */
 .progress-wrap { width: 100%; max-width: 420px; padding: 0 8px; }
-.waveform {
+.playbar {
+  position: relative;
+  height: 28px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  height: 36px;
-  gap: 2px;
   cursor: pointer;
   padding: 4px 0;
+  outline: none;
 }
-.waveform .wf-bar {
-  flex: 1 1 0;
-  min-width: 2px;
-  height: var(--h, 30%);
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.18);
-  transform-origin: center;
-  transition:
-    background 140ms linear,
-    transform 180ms cubic-bezier(.2,.8,.2,1),
-    box-shadow 180ms linear;
-  will-change: background, transform;
+.playbar-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: visible;
+  transition: height 140ms cubic-bezier(.2,.8,.2,1);
 }
-.waveform .wf-bar.played {
+.playbar:hover .playbar-track,
+.playbar.scrubbing .playbar-track,
+.playbar:focus-visible .playbar-track {
+  height: 6px;
+}
+.playbar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  border-radius: 999px;
   background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 90%, white 10%),
+    90deg,
+    color-mix(in srgb, var(--accent) 75%, white 25%),
     var(--accent)
   );
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent);
+  transition: width 120ms linear;
 }
-.waveform .wf-bar.head {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 50%, white 50%),
-    color-mix(in srgb, var(--accent) 80%, white 20%)
-  );
-  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 70%, transparent);
-  transform: scaleY(1.18);
+.playbar.scrubbing .playbar-fill {
+  transition: none;
 }
-/* Soft fade-in on the bar right after the playhead so the leading edge feels less abrupt. */
-.waveform .wf-bar.head + .wf-bar {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.32),
-    rgba(255, 255, 255, 0.22)
-  );
+.playbar-handle {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45),
+              0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
+  transform: translate(-50%, -50%) scale(0.85);
+  opacity: 0;
+  transition: opacity 140ms ease, transform 140ms cubic-bezier(.2,.8,.2,1), left 120ms linear;
+  pointer-events: none;
+}
+.playbar:hover .playbar-handle,
+.playbar.scrubbing .playbar-handle,
+.playbar:focus-visible .playbar-handle {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+.playbar.scrubbing .playbar-handle {
+  transition: opacity 140ms ease, transform 140ms cubic-bezier(.2,.8,.2,1);
 }
 .progress-times {
   display: flex;
@@ -468,18 +485,75 @@ button { font-family: inherit; }
 .lyrics-scroll {
   flex: 1; overflow-y: auto; padding-right: 4px;
   scroll-behavior: smooth;
+  /* Add breathing room above/below so first/last line can centre */
+  padding-top: 35%;
+  padding-bottom: 35%;
+  scroll-padding: 50% 0;
 }
 .lyric-line {
-  font-size: 13px;
-  color: rgba(255,255,255,0.40);
-  padding: 4px 0;
-  transition: color 250ms ease, font-size 250ms ease, font-weight 250ms ease;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.32);
+  line-height: 1.4;
+  padding: 8px 4px;
+  letter-spacing: -0.01em;
+  /* Apple-Music-style depth-of-field — the further from the active line,
+     the more the text dims and slightly blurs. The JS sets --lyric-dist on
+     each line whenever the active line changes. */
+  --lyric-dist: 5;
+  transform-origin: left center;
+  transform: scale(calc(1 - var(--lyric-dist) * 0.02));
+  filter: blur(calc(var(--lyric-dist) * 0.4px));
+  transition:
+    color 320ms cubic-bezier(.2,.8,.2,1),
+    font-size 320ms cubic-bezier(.2,.8,.2,1),
+    transform 320ms cubic-bezier(.2,.8,.2,1),
+    filter 320ms cubic-bezier(.2,.8,.2,1),
+    opacity 320ms ease;
 }
 .lyric-line.active {
-  color: var(--text);
-  font-size: 16px;
-  font-weight: 700;
-  text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 50%, transparent);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  --lyric-dist: 0;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.lyric-word {
+  display: inline-block;
+  white-space: pre;
+  color: inherit;
+  transition: color 220ms ease, text-shadow 220ms ease;
+}
+.lyric-line.active .lyric-word {
+  color: rgba(255, 255, 255, 0.4);
+}
+.lyric-line.active .lyric-word.passed {
+  color: #fff;
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.lyric-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 4px;
+}
+.lyric-skeleton-bar {
+  height: 14px;
+  width: var(--w, 60%);
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.06),
+    rgba(255, 255, 255, 0.18),
+    rgba(255, 255, 255, 0.06)
+  );
+  background-size: 200% 100%;
+  animation: lyric-skeleton-shimmer 1.6s linear infinite;
+}
+@keyframes lyric-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 /* ---- Settings ---- */
@@ -673,10 +747,11 @@ body.mini .cover-fallback { font-size: 36px; }
 body.mini .title { font-size: 13px; }
 body.mini .artist { font-size: 11px; }
 body.mini .album,
+body.mini .playbar,
 body.mini .progress-times,
 body.mini .tabs,
 body.mini .tabpanel,
-body.mini .waveform { display: none; }
+body.mini .playbar { display: none; }
 body.mini .progress-wrap { padding: 0; max-width: 0; height: 0; }
 body.mini .controls { gap: 10px; }
 body.mini .ctrl { width: 34px; height: 34px; }

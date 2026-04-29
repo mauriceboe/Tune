@@ -44,6 +44,11 @@ class PresenceWorker:
         self._current_session = None
         self._session_lock = threading.Lock()
         self._last_recorded_key: str | None = None
+        # In-memory cache: (artist|title) → cover_data_url. Used to enrich
+        # recents with covers without bloating the on-disk history JSON.
+        # LRU-trimmed to keep the process memory bounded.
+        self._recent_covers: dict[str, str] = {}
+        self._recent_covers_max = 50
 
     # ---- public ----
 
@@ -158,6 +163,34 @@ class PresenceWorker:
             "listened": int(track.get("duration") or 0),
         })
 
+    def _cover_key(self, artist: str, title: str) -> str:
+        return f"{(artist or '').lower()}|{(title or '').lower()}"
+
+    def _remember_cover(self, artist: str, title: str, cover_data_url: str) -> None:
+        if not cover_data_url or not (artist or title):
+            return
+        key = self._cover_key(artist, title)
+        # Re-insert to mark as most-recently-used
+        self._recent_covers.pop(key, None)
+        self._recent_covers[key] = cover_data_url
+        while len(self._recent_covers) > self._recent_covers_max:
+            self._recent_covers.pop(next(iter(self._recent_covers)))
+
+    def enrich_recents_with_covers(self, recents: list[dict]) -> list[dict]:
+        """Adds cover_data_url to recent entries from the in-memory cache.
+
+        History JSON stays slim (no base64 blobs on disk); covers from the
+        current session show up in the UI right away.
+        """
+        out: list[dict] = []
+        for entry in recents:
+            cover = self._recent_covers.get(self._cover_key(entry.get("artist", ""), entry.get("title", "")))
+            if cover:
+                out.append({**entry, "cover_data_url": cover})
+            else:
+                out.append(entry)
+        return out
+
     def _serialize_track(self, track):
         thumb_bytes = track.get("thumb_bytes")
         cover_data_url = None
@@ -169,6 +202,7 @@ class PresenceWorker:
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=88)
                 cover_data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+                self._remember_cover(track.get("artist", ""), track.get("title", ""), cover_data_url)
             except Exception:
                 pass
         return {

@@ -69,7 +69,7 @@ class Daemon:
     def __init__(self):
         self.settings = load_settings()
         self.history = HistoryStore()
-        self.lyrics_cache = LyricsCache()
+        self.lyrics_cache = LyricsCache(log=log)
         self.artwork_host = ArtworkHost()
         self._lyrics_track_key: str | None = None
         self.worker = PresenceWorker(
@@ -108,7 +108,7 @@ class Daemon:
             "event": "tick",
             "data": {
                 **update,
-                "recents": self.history.recent_unique(8),
+                "recents": self.worker.enrich_recents_with_covers(self.history.recent_unique(8)),
                 "history": self.history.recent(80),
                 "stats": self.history.today_stats(),
             },
@@ -178,7 +178,7 @@ class Daemon:
         return True
 
     def rpc_recents(self, n: int = 8) -> list:
-        return self.history.recent_unique(int(n))
+        return self.worker.enrich_recents_with_covers(self.history.recent_unique(int(n)))
 
     def rpc_history(self, n: int = 80) -> list:
         return self.history.recent(int(n))

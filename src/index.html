@@ -43,7 +43,12 @@
       </div>
 
       <div class="progress-wrap">
-        <div class="waveform" id="waveform" aria-hidden="true"></div>
+        <div class="playbar" id="playbar" role="slider" aria-label="Seek" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="playbar-track">
+            <div class="playbar-fill" id="playbarFill"></div>
+            <div class="playbar-handle" id="playbarHandle"></div>
+          </div>
+        </div>
         <div class="progress-times">
           <span id="timeNow">0:00</span>
           <span id="timeRemain">-0:00</span>

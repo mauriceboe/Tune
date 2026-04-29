@@ -27,7 +27,9 @@ const ui = {
   title: $("title"),
   artist: $("artist"),
   album: $("album"),
-  waveform: $("waveform"),
+  playbar: $("playbar"),
+  playbarFill: $("playbarFill"),
+  playbarHandle: $("playbarHandle"),
   timeNow: $("timeNow"),
   timeRemain: $("timeRemain"),
   iconPlay: $("iconPlay"),
@@ -125,86 +127,13 @@ document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => showTab(t.dataset.tab));
 });
 
-// ---- waveform ----
-const WAVEFORM_BARS = 56;
-
-function hashSeed(str) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h >>> 0;
-}
-
-function mulberry32(seed) {
-  let t = seed >>> 0;
-  return function () {
-    t = (t + 0x6D2B79F5) >>> 0;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function buildWaveform(seedKey) {
-  const rng = mulberry32(hashSeed(seedKey || "tune"));
-  const frag = document.createDocumentFragment();
-  for (let i = 0; i < WAVEFORM_BARS; i++) {
-    const base = 0.25 + 0.35 * Math.abs(Math.sin((i / WAVEFORM_BARS) * Math.PI * 2.6));
-    const jitter = (rng() - 0.5) * 0.55;
-    const h = Math.max(0.18, Math.min(1, base + jitter));
-    const bar = document.createElement("div");
-    bar.className = "wf-bar";
-    bar.style.setProperty("--h", `${(h * 100).toFixed(1)}%`);
-    frag.appendChild(bar);
-  }
-  ui.waveform.innerHTML = "";
-  ui.waveform.appendChild(frag);
-  lastHeadIdx = -2; // force full repaint on next paintWaveform()
-}
-
-let lastHeadIdx = -2; // -2 means "needs full repaint" (e.g. after buildWaveform)
-
-function paintWaveform(ratio) {
-  const bars = ui.waveform.children;
-  const n = bars.length;
-  if (!n) return;
-  const headIdx = Math.min(n - 1, Math.max(0, Math.floor(ratio * n)));
-  if (headIdx === lastHeadIdx) return;
-
-  // First call after a track change (or no prior state) — paint everything.
-  if (lastHeadIdx === -2) {
-    for (let i = 0; i < n; i++) {
-      const b = bars[i];
-      b.classList.toggle("played", i < headIdx);
-      b.classList.toggle("head", i === headIdx);
-    }
-  } else if (headIdx > lastHeadIdx) {
-    // Head moved forward — flip the previous head into played, fill the gap.
-    if (lastHeadIdx >= 0 && bars[lastHeadIdx]) {
-      bars[lastHeadIdx].classList.remove("head");
-      bars[lastHeadIdx].classList.add("played");
-    }
-    for (let i = lastHeadIdx + 1; i < headIdx; i++) bars[i].classList.add("played");
-    if (bars[headIdx]) bars[headIdx].classList.add("head");
-  } else {
-    // Head moved backwards — clear played from the gap and reset states.
-    if (lastHeadIdx >= 0 && bars[lastHeadIdx]) {
-      bars[lastHeadIdx].classList.remove("head");
-    }
-    for (let i = headIdx + 1; i <= lastHeadIdx; i++) {
-      if (bars[i]) bars[i].classList.remove("played", "head");
-    }
-    if (bars[headIdx]) {
-      bars[headIdx].classList.remove("played");
-      bars[headIdx].classList.add("head");
-    }
-  }
-  // Smooth sub-bar progress for the head bar's glow position.
-  const subPos = (ratio * n) - headIdx;
-  ui.waveform.style.setProperty("--head-sub", subPos.toFixed(3));
-  lastHeadIdx = headIdx;
+// ---- playbar (progress + click/drag seek) ----
+function paintPlaybar(ratio) {
+  const r = Math.min(1, Math.max(0, ratio));
+  const pct = (r * 100).toFixed(2);
+  ui.playbarFill.style.width = `${pct}%`;
+  ui.playbarHandle.style.left = `${pct}%`;
+  ui.playbar.setAttribute("aria-valuenow", String(Math.round(r * 100)));
 }
 
 // ---- track render ----
@@ -216,7 +145,7 @@ function renderTrack(track) {
     ui.cover.classList.remove("has-art");
     ui.cover.style.backgroundImage = "";
     ui.backdrop.style.backgroundImage = "";
-    paintWaveform(0);
+    paintPlaybar(0);
     ui.timeNow.textContent = "0:00";
     ui.timeRemain.textContent = "-0:00";
     setIcon(false);
@@ -233,13 +162,15 @@ function renderTrack(track) {
     ui.title.textContent = track.title || "—";
     ui.artist.textContent = track.artist || "";
     ui.album.textContent = track.album || "";
+    // Immediately swap to a loading state so the user sees a response,
+    // even while the backend is still walking the lyrics provider chain.
+    renderLyricsLoading();
     ui.title.classList.remove("title-fade");
     void ui.title.offsetWidth;
     ui.title.classList.add("title-fade");
     ui.artist.classList.remove("title-fade");
     void ui.artist.offsetWidth;
     ui.artist.classList.add("title-fade");
-    buildWaveform(newKey);
   }
 
   if (track.cover_data_url) {
@@ -274,13 +205,20 @@ function renderMiniBar(recents) {
     ui.miniBarArtist.textContent = "Nothing yet this session";
     ui.miniBarTime.textContent = "";
     ui.miniBarCover.style.backgroundImage = "";
+    ui.miniBarCover.classList.remove("has-art");
     return;
   }
   bar.classList.remove("empty");
   ui.miniBarTitle.textContent = last.title || "—";
   ui.miniBarArtist.textContent = last.artist || "";
   ui.miniBarTime.textContent = last.duration ? fmtTime(last.duration) : "";
-  ui.miniBarCover.style.backgroundImage = "";
+  if (last.cover_data_url) {
+    ui.miniBarCover.style.backgroundImage = `url("${last.cover_data_url}")`;
+    ui.miniBarCover.classList.add("has-art");
+  } else {
+    ui.miniBarCover.style.backgroundImage = "";
+    ui.miniBarCover.classList.remove("has-art");
+  }
 }
 
 function setShuffleState(active) {
@@ -303,7 +241,8 @@ function tickProgress(now = performance.now()) {
     ? Math.min(t.duration, Math.max(0, Date.now() / 1000 - t.start))
     : Math.min(t.duration, Math.max(0, t.position || 0));
   const ratio = elapsedFloat / t.duration;
-  paintWaveform(ratio);
+  state.lastRatio = ratio;
+  paintPlaybar(ratio);
   // Text: only refresh when the visible second changes — once per second max.
   const second = Math.floor(elapsedFloat);
   if (second !== _lastShownSecond) {
@@ -370,19 +309,48 @@ function renderHistory(items) {
   }
 }
 
+function renderLyricsLoading() {
+  state.lyrics = null;
+  state.lyricsActiveIdx = -1;
+  state.lyricsHasWordTiming = false;
+  ui.lyricsScroll.innerHTML = "";
+  ui.lyricsStatus.textContent = "Loading lyrics…";
+  const skeleton = document.createElement("div");
+  skeleton.className = "lyric-skeleton";
+  for (let i = 0; i < 6; i++) {
+    const bar = document.createElement("div");
+    bar.className = "lyric-skeleton-bar";
+    bar.style.setProperty("--w", `${40 + Math.floor(Math.random() * 50)}%`);
+    skeleton.appendChild(bar);
+  }
+  ui.lyricsScroll.appendChild(skeleton);
+}
+
 function renderLyrics(lines) {
   state.lyrics = lines;
   state.lyricsActiveIdx = -1;
+  state.lyricsHasWordTiming = !!(lines && lines.some((l) => Array.isArray(l[2]) && l[2].length));
   ui.lyricsScroll.innerHTML = "";
   if (!lines || !lines.length) {
     ui.lyricsStatus.textContent = "No synced lyrics found.";
     return;
   }
-  ui.lyricsStatus.textContent = `${lines.length} lines · synced`;
-  for (const [, text] of lines) {
+  ui.lyricsStatus.textContent = `${lines.length} lines${state.lyricsHasWordTiming ? " · karaoke" : " · synced"}`;
+  for (let i = 0; i < lines.length; i++) {
+    const [, text, words] = lines[i];
     const div = document.createElement("div");
     div.className = "lyric-line";
-    div.textContent = text || "♪";
+    if (Array.isArray(words) && words.length) {
+      for (const [, wText] of words) {
+        const span = document.createElement("span");
+        span.className = "lyric-word";
+        span.textContent = wText;
+        div.appendChild(span);
+      }
+      div.dataset.hasWords = "1";
+    } else {
+      div.textContent = text || "♪";
+    }
     ui.lyricsScroll.appendChild(div);
   }
 }
@@ -394,20 +362,45 @@ function highlightLyric(elapsed) {
     if (state.lyrics[i][0] <= elapsed) idx = i;
     else break;
   }
-  if (idx === state.lyricsActiveIdx) return;
-  const lines = ui.lyricsScroll.children;
-  if (state.lyricsActiveIdx >= 0 && lines[state.lyricsActiveIdx]) {
-    lines[state.lyricsActiveIdx].classList.remove("active");
+  const lineEls = ui.lyricsScroll.children;
+  if (idx !== state.lyricsActiveIdx) {
+    if (state.lyricsActiveIdx >= 0 && lineEls[state.lyricsActiveIdx]) {
+      lineEls[state.lyricsActiveIdx].classList.remove("active");
+    }
+    if (idx >= 0 && lineEls[idx]) {
+      lineEls[idx].classList.add("active");
+      _scrollToLine(lineEls[idx]);
+    }
+    // Update neighbour styling for the Apple-Music-style depth-of-field look
+    for (let i = 0; i < lineEls.length; i++) {
+      const dist = Math.abs(i - idx);
+      lineEls[i].style.setProperty("--lyric-dist", String(Math.min(dist, 5)));
+    }
+    state.lyricsActiveIdx = idx;
   }
-  if (idx >= 0 && lines[idx]) {
-    lines[idx].classList.add("active");
-    const el = lines[idx];
-    const scroller = ui.lyricsScroll;
-    const elTop = el.offsetTop;
-    const targetScroll = elTop - scroller.clientHeight / 2 + el.clientHeight / 2;
-    scroller.scrollTo({ top: targetScroll, behavior: "smooth" });
+  // Word-level highlight inside the active line, if karaoke timing is present
+  if (state.lyricsHasWordTiming && idx >= 0) {
+    const line = state.lyrics[idx];
+    const words = Array.isArray(line[2]) ? line[2] : null;
+    const el = lineEls[idx];
+    if (words && el && el.dataset.hasWords === "1") {
+      const lineStart = line[0];
+      const local = elapsed - lineStart;
+      const spans = el.children;
+      for (let w = 0; w < words.length && w < spans.length; w++) {
+        const wt = words[w][0];
+        const passed = local >= wt;
+        spans[w].classList.toggle("passed", passed);
+      }
+    }
   }
-  state.lyricsActiveIdx = idx;
+}
+
+function _scrollToLine(el) {
+  const scroller = ui.lyricsScroll;
+  const elTop = el.offsetTop;
+  const targetScroll = elTop - scroller.clientHeight / 2 + el.clientHeight / 2;
+  scroller.scrollTo({ top: targetScroll, behavior: "smooth" });
 }
 
 function renderStats(s) {
@@ -559,17 +552,72 @@ $("btnMini").addEventListener("click", () => invoke("toggle_mini"));
 $("btnMin").addEventListener("click", () => appWindow.minimize());
 $("btnClose").addEventListener("click", () => appWindow.hide());
 
-// ---- waveform seek ----
-ui.waveform.addEventListener("click", (e) => {
-  const t = state.track;
-  if (!t || !t.duration) return;
-  const rect = ui.waveform.getBoundingClientRect();
-  const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  const targetSeconds = Math.floor(t.duration * ratio);
-  rpc("media_seek", { seconds: targetSeconds });
-});
+// ---- playbar seek (click + drag) ----
+(function () {
+  let scrubbing = false;
+  let pendingSeek = null;
+  let seekTimer = null;
 
-buildWaveform("tune");
+  function ratioFromEvent(e) {
+    const rect = ui.playbar.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  }
+
+  function commitSeek(seconds) {
+    if (seekTimer) clearTimeout(seekTimer);
+    // Coalesce rapid drag updates so we don't flood the backend
+    pendingSeek = seconds;
+    seekTimer = setTimeout(() => {
+      if (pendingSeek != null) rpc("media_seek", { seconds: pendingSeek });
+      pendingSeek = null;
+    }, 50);
+  }
+
+  ui.playbar.addEventListener("pointerdown", (e) => {
+    const t = state.track;
+    if (!t || !t.duration) return;
+    scrubbing = true;
+    ui.playbar.classList.add("scrubbing");
+    ui.playbar.setPointerCapture(e.pointerId);
+    const ratio = ratioFromEvent(e);
+    paintPlaybar(ratio);
+    commitSeek(Math.floor(t.duration * ratio));
+  });
+
+  ui.playbar.addEventListener("pointermove", (e) => {
+    if (!scrubbing) return;
+    const t = state.track;
+    if (!t || !t.duration) return;
+    const ratio = ratioFromEvent(e);
+    paintPlaybar(ratio);
+    commitSeek(Math.floor(t.duration * ratio));
+  });
+
+  function endScrub(e) {
+    if (!scrubbing) return;
+    scrubbing = false;
+    ui.playbar.classList.remove("scrubbing");
+    try { ui.playbar.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  ui.playbar.addEventListener("pointerup", endScrub);
+  ui.playbar.addEventListener("pointercancel", endScrub);
+
+  // Keyboard support: ←/→ jump 5s, Shift+←/→ jump 30s
+  ui.playbar.addEventListener("keydown", (e) => {
+    const t = state.track;
+    if (!t || !t.duration) return;
+    let delta = 0;
+    if (e.key === "ArrowLeft") delta = e.shiftKey ? -30 : -5;
+    if (e.key === "ArrowRight") delta = e.shiftKey ? 30 : 5;
+    if (delta === 0) return;
+    e.preventDefault();
+    const cur = (state.lastRatio || 0) * t.duration;
+    const target = Math.max(0, Math.min(t.duration, Math.floor(cur + delta)));
+    rpc("media_seek", { seconds: target });
+  });
+})();
+
+paintPlaybar(0);
 
 // ---- progress tick that polls update state on Settings tab ----
 setInterval(async () => {

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "Tune"
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.1.0"
 DISCORD_CLIENT_ID = os.environ.get("TUNE_DISCORD_CLIENT_ID", "861702238472241162")
 GITHUB_REPO = "mauriceboe/Tune"
 

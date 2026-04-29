@@ -168,9 +168,13 @@ class Daemon:
         session = self.worker.get_session()
         if not session:
             return False
+        # winsdk's TryChangePlaybackPositionAsync expects a Windows TimeSpan,
+        # which crosses the FFI boundary as an integer count of 100-nanosecond
+        # ticks (10_000_000 per second). A datetime.timedelta is rejected with
+        # "object cannot be interpreted as an integer".
+        ticks = max(0, int(seconds)) * 10_000_000
         try:
-            from datetime import timedelta
-            session.try_change_playback_position_async(timedelta(seconds=max(0, int(seconds))))
+            session.try_change_playback_position_async(ticks)
         except Exception as e:
             log(f"media_seek failed: {e!r}")
             return False

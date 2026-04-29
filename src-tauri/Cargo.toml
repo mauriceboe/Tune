@@ -1,6 +1,6 @@
 [package]
 name = "tune"
-version = "2.1.0"
+version = "2.1.1"
 description = "Discord Rich Presence for Apple Music on Windows"
 authors = ["mauriceboe"]
 edition = "2021"
